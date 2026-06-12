@@ -1,0 +1,169 @@
+[[rule]]
+name     = "truncate-without-tee"
+tool     = "Bash"
+message  = "head/tail truncation — if upstream is a slow build/test/log scan, `tee /tmp/claude-tee/<name>` first so you can query the rest without rerunning"
+severity = "warning"
+
+[rule.match]
+all = [
+    { in = { field = "@last_pipe_command", values = ["head", "tail"] } },
+    { not = { regex = { field = "command", pattern = '(^|\s)tee\s' } } },
+]
+
+[[rule]]
+name     = "xargs-without-null"
+tool     = "Bash"
+message  = "xargs over newline input — use -0/--null with -print0 (find) or -Z (grep/rg) upstream"
+severity = "warning"
+
+[rule.match]
+all = [
+    { regex = { field = "command", pattern = '\|\s*xargs\b' } },
+    { not = { regex = { field = "command", pattern = '(-0|--null|-print0|-Z|--null-data)' } } },
+]
+
+[[rule]]
+name     = "rg-pipe-wc"
+tool     = "Bash"
+message  = "`rg ... | wc -l` — use `rg -c` (or `--count-matches`)"
+severity = "warning"
+
+[rule.match]
+regex = { field = "command", pattern = '\brg\b[^|]*\|\s*wc\s+-l\b' }
+
+[[rule]]
+name     = "rg-pipe-sort-uniq"
+tool     = "Bash"
+message  = "`rg ... | sort -u` over filenames — use `rg -l`"
+severity = "warning"
+
+[rule.match]
+regex = { field = "command", pattern = '\brg\b[^|]*\|\s*sort\s+(-u|--unique)\b' }
+
+[[rule]]
+name     = "curl-pipe-shell"
+tool     = "Bash"
+message  = "curl/wget piped into a shell — download, inspect, then execute"
+severity = "error"
+
+[rule.match]
+regex = { field = "command", pattern = '\b(curl|wget)\b[^|]*\|\s*(bash|sh|zsh)\b' }
+
+[[rule]]
+name     = "find-unbounded-root"
+tool     = "Bash"
+message  = "find at /, ~, or $HOME without -maxdepth — narrow the root or use `fd`"
+severity = "warning"
+
+[rule.match]
+all = [
+    { regex = { field = "command", pattern = '^\s*find\s+(/|~|\$HOME)\b' } },
+    { not = { regex = { field = "command", pattern = '-maxdepth\b' } } },
+]
+
+[[rule]]
+name     = "pkill-by-name"
+tool     = "Bash"
+message  = "pkill/killall by name — find PID with `pgrep`, then `kill <PID>`"
+severity = "warning"
+
+[rule.match]
+regex = { field = "command", pattern = '^\s*(pkill|killall)\b' }
+
+[[rule]]
+name     = "git-add-all"
+tool     = "Bash"
+message  = "git add -A/-a/. stages everything — stage explicit paths"
+severity = "warning"
+
+[rule.match]
+any = [
+    { regex = { field = "command", pattern = '\bgit\s+add\s+(?:[^\s;|&]+\s+)*(-A|--all|-a|\.)(\s|;|\||&|$)' } },
+    { regex = { field = "command", pattern = '\bgit\s+commit\b[^|;&]*\s-[A-Za-z]*a[A-Za-z]*(\s|;|\||&|$)' } },
+]
+
+[[rule]]
+name     = "git-no-verify"
+tool     = "Bash"
+message  = "git --no-verify skips hooks — fix the failing hook instead"
+severity = "error"
+
+[rule.match]
+regex = { field = "command", pattern = '\bgit\s+(commit|push|rebase|merge)\b[^|]*--no-verify\b' }
+
+[[rule]]
+name     = "git-log-p-wide"
+tool     = "Bash"
+message  = "git log -p without --stat emits full diff — survey with `--stat` first"
+severity = "warning"
+
+[rule.match]
+all = [
+    { regex = { field = "command", pattern = '\bgit\s+log\b[^|]*\s-p\b' } },
+    { not = { regex = { field = "command", pattern = '--stat' } } },
+]
+
+[[rule]]
+name     = "sleep-wait"
+tool     = "Bash"
+message  = "sleep blocks the agent — the harness notifies on background completion"
+severity = "warning"
+
+[rule.match]
+any = [
+    { regex = { field = "command", pattern = '^\s*sleep\b' } },
+    { regex = { field = "command", pattern = '\bsleep\s+\d+\s*(&&|;|$)' } },
+]
+
+[[rule]]
+name     = "cat-into-edit"
+tool     = "Bash"
+message  = "cat/bat to view a file — use the Read tool"
+severity = "warning"
+
+[rule.match]
+regex = { field = "command", pattern = '^\s*(cat|bat)\s+[^|]+$' }
+
+[[rule]]
+name     = "sed-in-place"
+tool     = "Bash"
+message  = "sed -i / awk rewrite — use the Edit tool"
+severity = "warning"
+
+[rule.match]
+any = [
+    { regex = { field = "command", pattern = '\bsed\s+-i\b' } },
+    { regex = { field = "command", pattern = '^\s*awk\b[^|]*>\s*\S+' } },
+]
+
+[[rule]]
+name     = "cabal-exec-outside-project"
+tool     = "Bash"
+message  = "`cabal exec` needs a built project — `cd /tmp` strips the env; `--package-env` is a GHC flag, not a cabal flag. Run from the project root (after `cabal build`), or build a scratch project for ad-hoc deps"
+severity = "warning"
+
+[rule.match]
+any = [
+    # `cd /tmp` (or a /tmp subdir) into a `cabal exec` leaves the project env behind
+    { regex = { field = "command", pattern = '\bcd\s+/tmp\b[^|;&]*&&\s*cabal\s+(\S+\s+)*exec\b' } },
+    # `--package-env` passed to `cabal exec` (GHC flag, not a cabal one)
+    { regex = { field = "command", pattern = '\bcabal\s+(\S+\s+)*exec\b[^|;&]*--package-env' } },
+]
+
+[[rule]]
+name     = "ghci-browse-to-grep"
+tool     = "Bash"
+message  = "`:browse Mod | grep …` doesn't work — signatures span multiple lines and grep returns 1 on no match. Issue one `:info NAME` per name of interest"
+severity = "warning"
+
+[rule.match]
+regex = { field = "command", pattern = ':browse\b[^|]*\|\s*(grep|egrep|rg)\b' }
+
+[[rule]]
+name     = "ghci-double-dash-flag"
+tool     = "Bash"
+message  = "Bare `ghci`/`ghc` takes single-dash long flags (`-package`, `-package-env=…`); `--package` only works with `cabal exec`/`stack exec`"
+severity = "warning"
+
+[rule.match]
+regex = { field = "command", pattern = '(^|&&|;)\s*(ghci|ghc)\s[^|;&]*--package(-env)?(\s|=|$)' }

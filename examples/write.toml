@@ -1,0 +1,16 @@
+# Write hint rules.
+
+[[rule]]
+name         = "bash-script-overgrowth"
+tool         = "Write"
+message      = "shell script is growing past one-screen — port real logic to Python (uv-managed) instead"
+severity     = "warning"
+sample_field = "file_path"
+
+# Fires when a `.sh` file is being Written with more than ~50 LoC worth of
+# content (~1500 chars).
+[rule.match]
+all = [
+    { regex  = { field = "file_path", pattern = '\.sh$' } },
+    { length = { field = "content",  op = ">", value = 1500 } },
+]

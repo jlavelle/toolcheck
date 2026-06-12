@@ -1,0 +1,14 @@
+# Grep hint rules.
+
+[[rule]]
+name         = "grep-unscoped"
+tool         = "Grep"
+message      = "Grep without path or glob scans the whole tree — narrow with `path` or `glob`"
+severity     = "warning"
+sample_field = "pattern"
+
+[rule.match]
+all = [
+    { absent = "path" },
+    { absent = "glob" },
+]

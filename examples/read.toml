@@ -1,0 +1,11 @@
+# Read hint rules.
+
+[[rule]]
+name         = "read-already-read"
+tool         = "Read"
+message      = "file already Read this session — skip the redundant Read"
+severity     = "warning"
+sample_field = "file_path"
+
+[rule.match]
+cross_call = { kind = "duplicate_field_within_session", field = "file_path" }
