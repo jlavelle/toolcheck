@@ -301,7 +301,7 @@ def lint_rule(rule: Rule) -> list[str]:
 def lint_rules(rules: list[Rule]) -> list[str]:
     """Catalogue-wide problems, one human-readable line each."""
     problems = [
-        f"duplicate rule name: {name!r} ({n} definitions)"
+        f"duplicate rule name: {name!r} ({n} definitions; last wins)"
         for name, n in sorted(Counter(r.name for r in rules).items())
         if n > 1
     ]

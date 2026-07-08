@@ -297,36 +297,60 @@ def load_toml(data: bytes) -> list[Rule]:
     return [_parse_rule(_mapping(r, "rule")) for r in rules]
 
 
-def _rules_dir() -> Path:
-    """Resolve the catalogue directory from env or XDG defaults."""
-    if env := os.environ.get("TOOLCHECK_RULES_DIR"):
-        return Path(env)
+def _rules_dirs() -> list[Path]:
+    """Resolve the catalogue directories from env or XDG defaults.
+
+    TOOLCHECK_RULES_DIRS holds a comma-separated list. TOOLCHECK_RULES_DIR is
+    the singular predecessor, kept for backwards compatibility; when both are
+    set, entries from both are used in order.
+    """
+    dirs: list[Path] = []
+    if plural := os.environ.get("TOOLCHECK_RULES_DIRS"):
+        dirs.extend(Path(s) for p in plural.split(",") if (s := p.strip()))
+    if single := os.environ.get("TOOLCHECK_RULES_DIR"):
+        dirs.append(Path(single))
+    if dirs:
+        return dirs
     base = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
-    return base / "toolcheck" / "rules"
+    return [base / "toolcheck" / "rules"]
 
 
 @functools.cache
 def _load_all_rules() -> list[Rule]:
-    """Load every *.toml in the config rules directory, sorted by filename. Memoised; call cache_clear() to invalidate."""
-    root = _rules_dir()
-    if not root.is_dir():
-        return []
+    """Load every *.toml across the config rules directories, in load order without deduplication.
+
+    Load order is directory order (TOOLCHECK_RULES_DIRS left to right, then
+    TOOLCHECK_RULES_DIR), then filename order within each directory. Memoised;
+    call cache_clear() to invalidate.
+    """
     rules: list[Rule] = []
-    toml_names = sorted(
-        p.name for p in root.iterdir() if p.is_file() and p.name.endswith(".toml")
-    )
-    for name in toml_names:
-        rules.extend(load_toml((root / name).read_bytes()))
+    for root in _rules_dirs():
+        if not root.is_dir():
+            continue
+        toml_names = sorted(
+            p.name for p in root.iterdir() if p.is_file() and p.name.endswith(".toml")
+        )
+        for name in toml_names:
+            rules.extend(load_toml((root / name).read_bytes()))
     return rules
 
 
+def _dedup_last_wins(rules: list[Rule]) -> list[Rule]:
+    """Collapse rules sharing a name, keeping the last definition in load order and giving it that position."""
+    by_name: dict[str, Rule] = {}
+    for rule in rules:
+        by_name.pop(rule.name, None)
+        by_name[rule.name] = rule
+    return list(by_name.values())
+
+
 def load_catalogue() -> list[Rule]:
-    """Enabled rules only. Memoised via _load_all_rules."""
-    return [r for r in _load_all_rules() if r.enabled]
+    """Enabled rules, last-wins by name. Memoised via _load_all_rules."""
+    return [r for r in _dedup_last_wins(_load_all_rules()) if r.enabled]
 
 
 def load_all_rules() -> list[Rule]:
-    """All rules including disabled. Memoised via _load_all_rules."""
+    """All rules including disabled, in load order without dedup (for linting). Memoised via _load_all_rules."""
     return _load_all_rules()
 
 

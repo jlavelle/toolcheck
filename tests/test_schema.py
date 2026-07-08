@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from hypothesis import given
 
@@ -19,6 +21,7 @@ from toolcheck.schema import (
     Predicate,
     PresencePredicate,
     RegexPredicate,
+    clear_rule_cache,
     cross_call_of,
     is_stateless,
     load_catalogue,
@@ -90,6 +93,52 @@ def test_catalogue_loads(rules_env: RulesEnv):
     assert isinstance(rules, list)
     names = [r.name for r in rules]
     assert len(names) == len(set(names)), "rule names must be unique"
+
+
+def test_catalogue_loads_from_multiple_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (a / "one.toml").write_bytes(
+        b'[[rule]]\nname = "from-a"\ntool = "Read"\nmessage = "a"\n[rule.match]\npresent = "file_path"\n'
+    )
+    (b / "two.toml").write_bytes(
+        b'[[rule]]\nname = "from-b"\ntool = "Read"\nmessage = "b"\n[rule.match]\npresent = "file_path"\n'
+    )
+    # Surrounding whitespace and empty segments must be tolerated.
+    monkeypatch.setenv("TOOLCHECK_RULES_DIRS", f"{a}, {b} ,,")
+    monkeypatch.delenv("TOOLCHECK_RULES_DIR", raising=False)
+    clear_rule_cache()
+    try:
+        names = {r.name for r in load_catalogue()}
+        assert {"from-a", "from-b"} <= names
+    finally:
+        clear_rule_cache()
+
+
+def test_later_dir_overrides_rule_last_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (a / "one.toml").write_bytes(
+        b'[[rule]]\nname = "dup"\ntool = "Read"\nmessage = "from a"\n[rule.match]\npresent = "file_path"\n'
+    )
+    (b / "two.toml").write_bytes(
+        b'[[rule]]\nname = "dup"\ntool = "Read"\nmessage = "from b"\n[rule.match]\npresent = "file_path"\n'
+    )
+    monkeypatch.setenv("TOOLCHECK_RULES_DIRS", f"{a},{b}")
+    monkeypatch.delenv("TOOLCHECK_RULES_DIR", raising=False)
+    clear_rule_cache()
+    try:
+        dups = [r for r in load_catalogue() if r.name == "dup"]
+        assert len(dups) == 1
+        assert dups[0].message == "from b"
+    finally:
+        clear_rule_cache()
 
 
 def test_catalogue_memoised(rules_env: RulesEnv):

@@ -38,7 +38,9 @@ Exit codes: 0 — no rules fired; 1 — at least one rule fired; 2 — usage err
 
 ## Rules
 
-Rules are TOML files in `~/.config/toolcheck/rules/` (or `$TOOLCHECK_RULES_DIR`). See the `examples/` for ideas to get started.
+Rules are TOML files in `~/.config/toolcheck/rules/`. Override the location with `$TOOLCHECK_RULES_DIRS`, a comma-separated list of directories (`$TOOLCHECK_RULES_DIR`, singular, is still honoured for backwards compatibility). See the `examples/` for ideas to get started.
+
+Rules sharing a name are deduplicated last-wins, so a later directory can override an earlier one's rule. Load order is directory order (`$TOOLCHECK_RULES_DIRS` left to right, then `$TOOLCHECK_RULES_DIR`), then filename order within each directory.
 
 Browse active rule names:
 
