@@ -11,6 +11,7 @@ from toolcheck.compile import compile_rule
 from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
+    ContextLengthPredicate,
     CrossCallPredicate,
     InPredicate,
     LengthPredicate,
@@ -51,6 +52,8 @@ def pred_to_toml(p: Predicate) -> dict[str, object]:
             return {"in": {"field": f, "values": list(vs)}}
         case LengthPredicate(field=f, op=op, value=v):
             return {"length": {"field": f, "op": op, "value": v}}
+        case ContextLengthPredicate(op=op, value=v):
+            return {"context_length": {"op": op, "value": v}}
         case NotPredicate(operand=o):
             return {"not": pred_to_toml(o)}
         case AllPredicate(operands=ops):

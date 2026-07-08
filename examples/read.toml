@@ -9,3 +9,13 @@ sample_field = "file_path"
 
 [rule.match]
 cross_call = { kind = "duplicate_field_within_session", field = "file_path" }
+
+[[rule]]
+name         = "read-context-exhausted"
+tool         = "Read"
+message      = "context is nearly full (≥200k tok) — summarise or compact before reading more"
+severity     = "error"
+sample_field = "file_path"
+
+[rule.match]
+context_length = { op = ">=", value = 200000 }

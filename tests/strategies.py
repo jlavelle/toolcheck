@@ -7,6 +7,7 @@ from hypothesis import strategies as st
 from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
+    ContextLengthPredicate,
     CrossCallPredicate,
     InPredicate,
     LengthPredicate,
@@ -50,6 +51,11 @@ def _leaf_predicates() -> st.SearchStrategy[Predicate]:
         op=st.sampled_from(LENGTH_OPS),
         value=st.integers(min_value=-1000, max_value=100000),
     )
+    context_length = st.builds(
+        ContextLengthPredicate,
+        op=st.sampled_from(LENGTH_OPS),
+        value=st.integers(min_value=0, max_value=1_000_000),
+    )
     cross = st.builds(
         CrossCallPredicate,
         kind=st.sampled_from(
@@ -57,7 +63,7 @@ def _leaf_predicates() -> st.SearchStrategy[Predicate]:
         ),
         field=NONEMPTY_TEXT,
     )
-    return st.one_of(regex, presence, value, length, cross)
+    return st.one_of(regex, presence, value, length, context_length, cross)
 
 
 def predicates() -> st.SearchStrategy[Predicate]:
@@ -97,7 +103,12 @@ def _bash_leaves() -> st.SearchStrategy[Predicate]:
         op=st.sampled_from(LENGTH_OPS),
         value=st.integers(min_value=0, max_value=20),
     )
-    return st.one_of(regex, presence, value, length)
+    context_length = st.builds(
+        ContextLengthPredicate,
+        op=st.sampled_from(LENGTH_OPS),
+        value=st.integers(min_value=0, max_value=200_000),
+    )
+    return st.one_of(regex, presence, value, length, context_length)
 
 
 def bash_predicates() -> st.SearchStrategy[Predicate]:
@@ -111,6 +122,11 @@ def bash_predicates() -> st.SearchStrategy[Predicate]:
         ),
         max_leaves=6,
     )
+
+
+def context_lengths() -> st.SearchStrategy[int | None]:
+    """Ambient context lengths, including the unknown (None) case."""
+    return st.one_of(st.none(), st.integers(min_value=0, max_value=1_000_000))
 
 
 def bash_tool_inputs() -> st.SearchStrategy[dict[str, object]]:

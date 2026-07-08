@@ -80,6 +80,7 @@ A predicate tests a `field` of the tool input. Compose them freely with `not`, `
 | equals    | `{ equals = { field = "@last_pipe_command", value = "head" } }`        | the field equals the value                |
 | in        | `{ in = { field = "@last_pipe_command", values = ["head", "tail"] } }` | the field is one of the values            |
 | length    | `{ length = { field = "content", op = ">", value = 1500 } }`           | the field's length compares true          |
+| context_length | `{ context_length = { op = ">", value = 120000 } }`               | the session's context length compares true (see below) |
 | not       | `{ not = <predicate> }`                                                | the inner predicate fails                 |
 | all       | `{ all = [ <predicate>, … ] }`                                         | every operand holds                       |
 | any       | `{ any = [ <predicate>, … ] }`                                         | some operand holds                        |
@@ -88,13 +89,28 @@ A predicate tests a `field` of the tool input. Compose them freely with `not`, `
 
 The `length` predicate's `op` field accepts: `>`, `>=`, `<`, `<=`, `==`, `!=`.
 
-Example — head/tail truncation with no `tee`:
+#### Context length
+
+`context_length` compares the session's current context length, in tokens, against a constant with the same ops as `length`. Unlike the others it tests no field — the value is ambient, so it composes freely with `not`/`all`/`any` but takes no `field`.
+
+The PreToolUse payload carries no token count. `toolcheck` estimates it by summing the token counts (`input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`) in the last usage-bearing entry of the transcript named by `transcript_path`. Two consequences:
+
+- The value is only available under `toolcheck check --claude`. Under plain `check` it is unknown.
+- It is unknown on the first call of a session, and the transcript is written asynchronously so it may lag the current turn by a message.
+
+A comparison against an unknown context length holds `False` — so `context_length > N` stays quiet until the number is known, and `not { context_length > N }` holds while unknown.
+
+For example, nudge on a broad read once the window is well-filled:
 
 ```toml
+[[rule]]
+name    = "read-wide-when-full"
+tool    = "Read"
+message = "context is large — read a slice with offset/limit rather than the whole file"
 [rule.match]
 all = [
-    { in = { field = "@last_pipe_command", values = ["head", "tail"] } },
-    { not = { regex = { field = "command", pattern = '(^|\s)tee\s' } } },
+    { context_length = { op = ">", value = 120000 } },
+    { absent = "limit" },
 ]
 ```
 
@@ -109,6 +125,16 @@ A field starting with `@` is computed from the tool input. These are hardcoded i
 Available derived fields:
 
 - `@last_pipe_command` — the command name in the rightmost pipe segment (`rg foo | head -5` → `head`).
+
+Example — head/tail truncation with no `tee`:
+
+```toml
+[rule.match]
+all = [
+    { in = { field = "@last_pipe_command", values = ["head", "tail"] } },
+    { not = { regex = { field = "command", pattern = '(^|\s)tee\s' } } },
+]
+```
 
 ### Cross-call checks
 

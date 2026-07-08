@@ -35,7 +35,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Callable, Mapping, cast
 
-from toolcheck.compile import compile_rule, known_derived_fields, resolve_field
+from toolcheck.compile import Env, compile_rule, known_derived_fields, resolve_field
 from toolcheck.crosscall import evaluate as eval_cross_call
 from toolcheck.crosscall import field_value
 from toolcheck.schema import (
@@ -47,6 +47,7 @@ from toolcheck.schema import (
     predicate_fields,
 )
 from toolcheck.state import SessionState, load_state, save_state, state_path
+from toolcheck.transcript import read_context_length
 
 
 def _as_str(x: object) -> str | None:
@@ -79,14 +80,14 @@ def _sample(rule: Rule, tool_input: Mapping[str, object]) -> str:
     return str(sample) if sample is not None else ""
 
 
-def _eval_stateless(rule: Rule, tool_input: Mapping[str, object]) -> bool:
+def _eval_stateless(rule: Rule, env: Env) -> bool:
     """Compile and run a single stateless rule; False on any exception."""
     try:
         matcher = compile_rule(rule)
     except Exception:
         return False
     try:
-        return matcher(tool_input)
+        return matcher(env)
     except Exception:
         return False
 
@@ -98,14 +99,17 @@ def evaluate_call(
     use_dedup: bool,
     now: str,
     rules: list[Rule],
+    context_length: int | None = None,
 ) -> tuple[list[Rule], SessionState]:
     """Evaluate every rule for the tool against the input and prior state.
 
     Returns the rules that fired and the updated state (new fired entries for
     stateless rules, plus recorded observations for cross-call fields). Pure:
-    no I/O, deterministic given its arguments.
+    no I/O, deterministic given its arguments. ``context_length`` is the
+    current session context length in tokens, or None when unknown.
     """
     rules = [r for r in rules if r.tool == tool_name]
+    env = Env(tool_input, context_length)
     fired: list[Rule] = []
     next_state = state
 
@@ -123,7 +127,7 @@ def evaluate_call(
             continue  # nested cross-call: unsupported, skip defensively
         if use_dedup and rule.dedup and next_state.has_fired(rule.name):
             continue
-        if _eval_stateless(rule, tool_input):
+        if _eval_stateless(rule, env):
             fired.append(rule)
             if use_dedup and rule.dedup:
                 next_state = next_state.with_fired(rule.name, now)
@@ -240,10 +244,13 @@ def _check_claude(
     path = state_path(session_id) if has_session else None  # type: ignore[arg-type]
     state = load_state(path) if path is not None else SessionState()
 
+    transcript_path = _as_str(payload.get("transcript_path"))
+    context_length = read_context_length(transcript_path) if transcript_path else None
+
     now = datetime.now(timezone.utc).isoformat()
     catalogue = load_catalogue()
     fired, next_state = evaluate_call(
-        tool, tool_input, state, use_dedup, now, catalogue
+        tool, tool_input, state, use_dedup, now, catalogue, context_length
     )
 
     if path is not None:

@@ -7,6 +7,7 @@ extractor (see toolcheck.compile):
   PresencePredicate  — a field is present (non-null) or absent
   InPredicate        — a field's value is one of a fixed set (equals = singleton)
   LengthPredicate    — compare a field's length to a constant
+  ContextLengthPredicate — compare the session's current context length to a constant
   NotPredicate       — logical NOT
   AllPredicate       — logical AND
   AnyPredicate       — logical OR
@@ -65,6 +66,19 @@ class LengthPredicate:
     value: int
 
 
+@dataclass(frozen=True)
+class ContextLengthPredicate:
+    """Compare the session's current context length (in tokens) to a constant.
+
+    The value is ambient — not a tool-input field — so it reads from the
+    evaluation environment. It is unknown (None) outside --claude and on the
+    first call of a session; an unknown comparison holds False.
+    """
+
+    op: Literal[">", ">=", "<", "<=", "==", "!="]
+    value: int
+
+
 CrossCallKind = Literal["duplicate_field_within_session", "adjacent_near_identical"]
 
 
@@ -81,6 +95,7 @@ Predicate = Union[
     PresencePredicate,
     InPredicate,
     LengthPredicate,
+    ContextLengthPredicate,
     NotPredicate,
     AllPredicate,
     AnyPredicate,
@@ -126,6 +141,7 @@ _PREDICATE_KEYS: frozenset[str] = frozenset(
         "equals",
         "in",
         "length",
+        "context_length",
         "not",
         "all",
         "any",
@@ -166,6 +182,13 @@ def _severity(x: object) -> Literal["warning", "error"]:
     return cast('Literal["warning", "error"]', s)
 
 
+def _length_op(x: object, ctx: str) -> Literal[">", ">=", "<", "<=", "==", "!="]:
+    op = _string(x, ctx)
+    if op not in _LENGTH_OPS:
+        raise ValueError(f"{ctx} must be one of {sorted(_LENGTH_OPS)}, got {op!r}")
+    return cast('Literal[">", ">=", "<", "<=", "==", "!="]', op)
+
+
 def parse_predicate(d: object) -> Predicate:
     """Parse a single predicate mapping. Useful for rule authoring and tests."""
     m = _mapping(d, "predicate")
@@ -202,15 +225,16 @@ def parse_predicate(d: object) -> Predicate:
         )
     if "length" in m:
         lp = _mapping(m["length"], "length")
-        op = _string(lp["op"], "length.op")
-        if op not in _LENGTH_OPS:
-            raise ValueError(
-                f"length op must be one of {sorted(_LENGTH_OPS)}, got {op!r}"
-            )
         return LengthPredicate(
             field=_string(lp["field"], "length.field"),
-            op=cast('Literal[">", ">=", "<", "<=", "==", "!="]', op),
+            op=_length_op(lp["op"], "length.op"),
             value=_integer(lp["value"], "length.value"),
+        )
+    if "context_length" in m:
+        cl = _mapping(m["context_length"], "context_length")
+        return ContextLengthPredicate(
+            op=_length_op(cl["op"], "context_length.op"),
+            value=_integer(cl["value"], "context_length.value"),
         )
     if "not" in m:
         return NotPredicate(operand=parse_predicate(m["not"]))
@@ -319,7 +343,13 @@ def _pred_has_cross_call(pred: Predicate) -> bool:
             return _pred_has_cross_call(op)
         case AllPredicate(operands=ops) | AnyPredicate(operands=ops):
             return any(_pred_has_cross_call(o) for o in ops)
-        case RegexPredicate() | PresencePredicate() | InPredicate() | LengthPredicate():
+        case (
+            RegexPredicate()
+            | PresencePredicate()
+            | InPredicate()
+            | LengthPredicate()
+            | ContextLengthPredicate()
+        ):
             return False
 
 
@@ -344,6 +374,8 @@ def predicate_fields(pred: Predicate) -> Iterator[str]:
         case AllPredicate(operands=ops) | AnyPredicate(operands=ops):
             for o in ops:
                 yield from predicate_fields(o)
+        case ContextLengthPredicate():
+            return  # ambient, references no tool-input field
 
 
 def cross_call_of(rule: Rule) -> CrossCallPredicate | None:
