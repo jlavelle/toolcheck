@@ -3,7 +3,7 @@
   toolcheck list [--tool TOOL] [--json]
       Enumerate the catalogue.
 
-  toolcheck check [FILE] [--tool TOOL] [--claude] [--json]
+  toolcheck check [FILE] [--tool TOOL] [--claude] [--pi] [--json]
       Evaluate a tool-call JSON against the catalogue and report which rules
       fire. The input is read from FILE, or stdin when FILE is omitted, and
       may be either a bare {"tool_name", "tool_input"} object or a full
@@ -13,6 +13,11 @@
       additionalContext, denies calls that match error-severity rules,
       deduplicates once per (session, rule), and evaluates cross-call rules
       (which need per-session history to fire).
+
+      --pi emits the toolcheck pi-envelope: pi tool names/inputs are
+      normalised to the canonical vocabulary first, then the same
+      dedup/cross-call semantics apply with context_length taken straight
+      from the payload.
 
   toolcheck lint-rules
       Validate every rule in the catalogue: compile stateless predicates,
@@ -38,6 +43,7 @@ from typing import Callable, Mapping, cast
 from toolcheck.compile import Env, compile_rule, known_derived_fields, resolve_field
 from toolcheck.crosscall import evaluate as eval_cross_call
 from toolcheck.crosscall import field_value
+from toolcheck.pi import normalise
 from toolcheck.schema import (
     Rule,
     cross_call_of,
@@ -210,6 +216,8 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
     if args.claude:
         return _check_claude(payload, tool, tool_input)
+    if args.pi:
+        return _check_pi(payload, tool, tool_input)
 
     fired, _ = evaluate_call(
         tool,
@@ -232,49 +240,89 @@ def _cmd_check(args: argparse.Namespace) -> int:
     return 1
 
 
-def _check_claude(
+def _run_hook(
     payload: dict[str, object],
+    agent: str,
     tool: str,
     tool_input: dict[str, object],
-) -> int:
+    context_length: int | None,
+) -> tuple[list[str], list[str]]:
+    """Shared hook core: evaluate the call, persist state, render warnings/errors.
+
+    Returns rendered hint strings partitioned by severity. ``agent`` is the
+    state-directory key ("claude-code" or "pi") and also gives the payload its
+    session/context semantics. Pure apart from state I/O.
+    """
     session_id = _as_str(payload.get("session_id"))
     has_session = bool(session_id)
     use_dedup = has_session and not _dedup_disabled()
 
-    path = state_path(session_id) if has_session else None  # type: ignore[arg-type]
+    path = state_path(session_id, agent) if has_session else None  # type: ignore[arg-type]
     state = load_state(path) if path is not None else SessionState()
 
-    transcript_path = _as_str(payload.get("transcript_path"))
-    context_length = read_context_length(transcript_path) if transcript_path else None
-
     now = datetime.now(timezone.utc).isoformat()
-    catalogue = load_catalogue()
     fired, next_state = evaluate_call(
-        tool, tool_input, state, use_dedup, now, catalogue, context_length
+        tool, tool_input, state, use_dedup, now, load_catalogue(), context_length
     )
 
     if path is not None:
         save_state(path, next_state)
 
-    if not fired:
-        return 0
+    warnings = [render(r, tool_input) for r in fired if r.severity == "warning"]
+    errors = [render(r, tool_input) for r in fired if r.severity == "error"]
+    return warnings, errors
 
-    warnings = [r for r in fired if r.severity == "warning"]
-    errors = [r for r in fired if r.severity == "error"]
+
+def _check_claude(
+    payload: dict[str, object],
+    tool: str,
+    tool_input: dict[str, object],
+) -> int:
+    transcript_path = _as_str(payload.get("transcript_path"))
+    context_length = read_context_length(transcript_path) if transcript_path else None
+
+    warnings, errors = _run_hook(payload, "claude-code", tool, tool_input, context_length)
 
     output: dict[str, object] = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
     spec = cast("dict[str, object]", output["hookSpecificOutput"])
 
     if warnings:
-        spec["additionalContext"] = "\n\n".join(render(r, tool_input) for r in warnings)
+        spec["additionalContext"] = "\n\n".join(warnings)
 
     if errors:
         spec["permissionDecision"] = "deny"
-        spec["permissionDecisionReason"] = "\n\n".join(
-            render(r, tool_input) for r in errors
-        )
+        spec["permissionDecisionReason"] = "\n\n".join(errors)
 
     print(json.dumps(output))
+    return 0
+
+
+def _check_pi(
+    payload: dict[str, object],
+    tool: str,
+    tool_input: dict[str, object],
+) -> int:
+    context_length_raw = payload.get("context_length")
+    if context_length_raw is None:
+        context_length = None
+    elif isinstance(context_length_raw, int) and not isinstance(context_length_raw, bool):
+        context_length = context_length_raw
+    else:
+        print("error: 'context_length' must be an integer", file=sys.stderr)
+        return 2
+
+    tool, tool_input = normalise(tool, tool_input)
+    warnings, errors = _run_hook(payload, "pi", tool, tool_input, context_length)
+
+    print(
+        json.dumps(
+            {
+                "decision": "deny" if errors else "allow",
+                "warnings": warnings,
+                "errors": errors,
+            }
+        )
+    )
     return 0
 
 
@@ -338,8 +386,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_check.add_argument("file", nargs="?", help="JSON file; stdin when omitted")
     p_check.add_argument("--tool", help="override/supply the tool name")
-    p_check.add_argument(
+    agent = p_check.add_mutually_exclusive_group()
+    agent.add_argument(
         "--claude", action="store_true", help="emit Claude PreToolUse hook output"
+    )
+    agent.add_argument(
+        "--pi", action="store_true", help="emit the toolcheck pi-envelope output"
     )
     p_check.add_argument("--json", action="store_true", help="emit JSON")
     p_check.set_defaults(func=_cmd_check)

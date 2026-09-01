@@ -24,6 +24,51 @@ After installing on your PATH, add to Claude Code's `settings.json`:
 
 With `--claude`, each `(session, rule)` pair fires at most once per session when `dedup = true` (the default for warnings). Error-severity rules default to `dedup = false` so they block every occurrence. Set `TOOLCHECK_NO_DEDUP=1` to disable dedup globally, which can be useful while you're developing rules.
 
+## pi support
+
+The same rule catalogue can lint tool calls under [pi](https://github.com/earendil-works/pi): `toolcheck check --pi` speaks a toolcheck-defined envelope, and a thin pi extension spawns it per tool call.
+
+Install by copying the extension to pi's global extension directory:
+
+```sh
+cp pi/toolcheck.ts ~/.pi/agent/extensions/
+```
+
+(For a quick test without installing: `pi -e pi/toolcheck.ts`.)
+
+On each tool call the extension runs `toolcheck check --pi` with the call's input, the session id, and the current context length. Error-severity rules block the call; warnings are appended to the tool result as model-visible text. If `toolcheck` is missing, times out, or misbehaves, the extension allows the call and notifies once per session.
+
+### Envelope contract
+
+Input (stdin): `{"tool_name": "read", "tool_input": {…}, "session_id": "…", "context_length": 12345}` — `session_id` and `context_length` optional; `context_length` must be an integer when present. Output (stdout, always exit 0):
+
+```json
+{
+  "decision": "allow" | "deny",
+  "warnings": ["[rule] msg\n> sample"],
+  "errors": ["[rule] msg\n> sample"]
+}
+```
+
+`decision` is `"deny"` iff an error-severity rule fired. Dedup and cross-call state work exactly as under `--claude`, stored under `~/.local/state/pi/toolcheck/` so pi and Claude Code sessions never collide. `context_length` is taken straight from the payload (`ctx.getContextUsage()`), not estimated from a transcript.
+
+### Vocabulary normalisation
+
+pi tool names and input keys are mapped to the canonical Claude-shaped vocabulary before evaluation; unmapped names and keys pass through untouched, so pi-specific rules can target `find`, `ls`, or custom tools by pi name.
+
+| pi | canonical | field mapping |
+|---|---|---|
+| `bash` | `Bash` | none (`command` matches) |
+| `read` | `Read` | `path` → `file_path`; `offset`/`limit` pass through |
+| `write` | `Write` | `path` → `file_path` |
+| `edit` | `Edit` | `path` → `file_path`; `edits` passes through |
+| `grep` | `Grep` | none (`pattern` matches) |
+| anything else | unchanged | unchanged |
+
+Rules on `old_string` won't fire under pi: pi's `edit` tool has no single-string analog. For cross-tool coverage write rules that target `file_path` (mapped from `path`) instead.
+
+The same applies to `cross_call` fields: observations are recorded under the canonical field name after normalisation, so `cross_call = { field = "path" }` on `Read`/`Write`/`Edit` reads nothing and silently never fires. Target `file_path`. `toolcheck lint-rules` will not flag it — cross-call fields aren't validated (only `@`-derived fields are).
+
 ## Running manually
 
 Pipe JSON over stdin:
@@ -35,6 +80,8 @@ echo '{"tool_name":"Bash","tool_input":{"command":"rg foo | wc -l"}}' | toolchec
 ```
 
 Exit codes: 0 — no rules fired; 1 — at least one rule fired; 2 — usage error. The `--claude` hook path always exits 0 and reports through the hook envelope instead.
+
+Cross-call rules fire every recurrence (not subject to dedup) and need session state; only `toolcheck check --claude` and `toolcheck check --pi` evaluate them.
 
 ## Rules
 
@@ -150,4 +197,4 @@ cross_call = { kind = "duplicate_field_within_session", field = "file_path" }
 - `duplicate_field_within_session` — the field value was already seen in this session.
 - `adjacent_near_identical` — the field value nearly matches the previous call.
 
-Cross-call rules fire every recurrence (not subject to dedup) and need session state; only `toolcheck check --claude` evaluates them.
+Cross-call rules fire every recurrence (not subject to dedup) and need session state; only `toolcheck check --claude` and `toolcheck check --pi` evaluate them.

@@ -53,11 +53,11 @@ def _seen_key(tool: str, field_name: str) -> str:
     return f"{tool}{_KEY_SEP}{field_name}"
 
 
-def state_path(session_id: str) -> Path:
+def state_path(session_id: str, agent: str) -> Path:
     base = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state")))
     # session_id is untrusted — sanitise path-traversal characters.
     safe = session_id.replace("/", "_").replace("\\", "_").replace("..", "_")
-    return base / "claude-code" / "toolcheck" / f"{safe}.json"
+    return base / agent / "toolcheck" / f"{safe}.json"
 
 
 def _as_dict(x: object) -> dict[str, object] | None:

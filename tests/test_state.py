@@ -71,6 +71,16 @@ def test_history_keys_are_tool_field_scoped():
 
 def test_state_path_sanitises_session_id(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("XDG_STATE_HOME", "/tmp/xdg")
-    p = state_path("../../etc/passwd")
+    p = state_path("../../etc/passwd", "claude-code")
     assert ".." not in p.name
     assert p.suffix == ".json"
+
+
+def test_state_path_scopes_by_agent(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("XDG_STATE_HOME", "/tmp/xdg")
+    claude = state_path("same-session", "claude-code")
+    pi = state_path("same-session", "pi")
+    assert claude.parent.name == "toolcheck"
+    assert "claude-code" in claude.parts
+    assert "pi" in pi.parts
+    assert claude != pi

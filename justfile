@@ -1,5 +1,5 @@
 install:
-    uv tool install .
+    uv tool install . --force --refresh
 
 sync:
     uv sync
