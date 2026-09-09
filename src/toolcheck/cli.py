@@ -246,10 +246,11 @@ def _run_hook(
     tool: str,
     tool_input: dict[str, object],
     context_length: int | None,
-) -> tuple[list[str], list[str]]:
-    """Shared hook core: evaluate the call, persist state, render warnings/errors.
+) -> tuple[list[str], list[str], list[str]]:
+    """Shared hook core: evaluate the call, persist state, render hints.
 
-    Returns rendered hint strings partitioned by severity. ``agent`` is the
+    Returns rendered hint strings partitioned by severity (warnings, errors,
+    reminders). ``agent`` is the
     state-directory key ("claude-code" or "pi") and also gives the payload its
     session/context semantics. Pure apart from state I/O.
     """
@@ -270,7 +271,8 @@ def _run_hook(
 
     warnings = [render(r, tool_input) for r in fired if r.severity == "warning"]
     errors = [render(r, tool_input) for r in fired if r.severity == "error"]
-    return warnings, errors
+    reminders = [render(r, tool_input) for r in fired if r.severity == "reminder"]
+    return warnings, errors, reminders
 
 
 def _check_claude(
@@ -281,13 +283,15 @@ def _check_claude(
     transcript_path = _as_str(payload.get("transcript_path"))
     context_length = read_context_length(transcript_path) if transcript_path else None
 
-    warnings, errors = _run_hook(payload, "claude-code", tool, tool_input, context_length)
+    warnings, errors, reminders = _run_hook(
+        payload, "claude-code", tool, tool_input, context_length
+    )
 
     output: dict[str, object] = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
     spec = cast("dict[str, object]", output["hookSpecificOutput"])
 
-    if warnings:
-        spec["additionalContext"] = "\n\n".join(warnings)
+    if warnings or reminders:
+        spec["additionalContext"] = "\n\n".join([*warnings, *reminders])
 
     if errors:
         spec["permissionDecision"] = "deny"
@@ -312,7 +316,7 @@ def _check_pi(
         return 2
 
     tool, tool_input = normalise(tool, tool_input)
-    warnings, errors = _run_hook(payload, "pi", tool, tool_input, context_length)
+    warnings, errors, reminders = _run_hook(payload, "pi", tool, tool_input, context_length)
 
     print(
         json.dumps(
@@ -320,6 +324,7 @@ def _check_pi(
                 "decision": "deny" if errors else "allow",
                 "warnings": warnings,
                 "errors": errors,
+                "reminders": reminders,
             }
         )
     )

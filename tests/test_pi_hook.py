@@ -35,6 +35,7 @@ def _run_hook(
     assert output["decision"] in ("allow", "deny")
     assert isinstance(output.get("warnings"), list)
     assert isinstance(output.get("errors"), list)
+    assert isinstance(output.get("reminders"), list)
     return output
 
 
@@ -77,6 +78,28 @@ regex = { field = "command", pattern = '\\brg\\b[^|]*\\|\\s*wc\\s+-l\\b' }
     assert envelope["decision"] == "allow"
     warnings = cast("list[str]", envelope["warnings"])
     assert warnings and "pipe-to-wc" in warnings[0]
+    assert envelope["errors"] == []
+
+
+def test_reminder_severity_produces_allow():
+    reminder_toml = b"""
+[[rule]]
+name = "prefer-rg"
+tool = "Bash"
+message = "rg is available"
+severity = "reminder"
+
+[rule.match]
+regex = { field = "command", pattern = '\\bgrep\\b' }
+"""
+    envelope = _run_hook(
+        reminder_toml,
+        {"tool_name": "bash", "tool_input": {"command": "grep -r foo ."}},
+    )
+    assert envelope["decision"] == "allow"
+    reminders = cast("list[str]", envelope["reminders"])
+    assert reminders and "prefer-rg" in reminders[0]
+    assert envelope["warnings"] == []
     assert envelope["errors"] == []
 
 

