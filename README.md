@@ -1,6 +1,6 @@
 # toolcheck
 
-A linter for LLM tool calls. Run `toolcheck check` against tool call JSON on stdin. With `--claude` it emits the Claude PreToolUse hook envelope, injecting hints as `additionalContext` and refusing error-severity rules with `"permissionDecision": "deny"`.
+A linter for LLM tool calls. Run `toolcheck check` against tool call JSON on stdin. With `--claude` it emits the Claude PreToolUse hook envelope, injecting warning and reminder hints as `additionalContext` and refusing error-severity rules with `"permissionDecision": "deny"`.
 
 ## Install
 
@@ -22,7 +22,7 @@ After installing on your PATH, add to Claude Code's `settings.json`:
 }
 ```
 
-With `--claude`, each `(session, rule)` pair fires at most once per session when `dedup = true` (the default for warnings). Error-severity rules default to `dedup = false` so they block every occurrence. Set `TOOLCHECK_NO_DEDUP=1` to disable dedup globally, which can be useful while you're developing rules.
+With `--claude`, each `(session, rule)` pair fires at most once per session when `dedup = true` (the default for warnings and reminders). Error-severity rules default to `dedup = false` so they block every occurrence. Set `TOOLCHECK_NO_DEDUP=1` to disable dedup globally, which can be useful while you're developing rules.
 
 ## pi support
 
@@ -36,7 +36,7 @@ cp pi/toolcheck.ts ~/.pi/agent/extensions/
 
 (For a quick test without installing: `pi -e pi/toolcheck.ts`.)
 
-On each tool call the extension runs `toolcheck check --pi` with the call's input, the session id, and the current context length. Error-severity rules block the call; warnings are appended to the tool result as model-visible text. If `toolcheck` is missing, times out, or misbehaves, the extension allows the call and notifies once per session.
+On each tool call the extension runs `toolcheck check --pi` with the call's input, the session id, and the current context length. Error-severity rules block the call; warnings and reminders are appended to the tool result as model-visible text. If `toolcheck` is missing, times out, or misbehaves, the extension allows the call and notifies once per session.
 
 ### Envelope contract
 
@@ -46,11 +46,12 @@ Input (stdin): `{"tool_name": "read", "tool_input": {…}, "session_id": "…", 
 {
   "decision": "allow" | "deny",
   "warnings": ["[rule] msg\n> sample"],
+  "reminders": ["[rule] msg\n> sample"],
   "errors": ["[rule] msg\n> sample"]
 }
 ```
 
-`decision` is `"deny"` iff an error-severity rule fired. Dedup and cross-call state work exactly as under `--claude`, stored under `~/.local/state/pi/toolcheck/` so pi and Claude Code sessions never collide. `context_length` is taken straight from the payload (`ctx.getContextUsage()`), not estimated from a transcript.
+Reminders are non-blocking context delivered exactly like warnings, and the `reminders` key is always present (empty when none). `decision` is `"deny"` iff an error-severity rule fired. Dedup and cross-call state work exactly as under `--claude`, stored under `~/.local/state/pi/toolcheck/` so pi and Claude Code sessions never collide. `context_length` is taken straight from the payload (`ctx.getContextUsage()`), not estimated from a transcript.
 
 ### Vocabulary normalisation
 
@@ -108,14 +109,14 @@ A rule names the tool it inspects, the hint to show, and a `match` predicate. St
 name     = "rg-pipe-wc"    # Must be unique
 tool     = "Bash"          # Must match the name of the tool the model calls
 message  = "`rg ... | wc -l` — use `rg -c` (or `--count-matches`)"
-severity = "warning"       # "warning" | "error"
-dedup    = true            # optional: fire once per (session, rule), default true for warnings, false for errors
+severity = "warning"       # "warning" | "error" | "reminder"
+dedup    = true            # optional: fire once per (session, rule), default true for warnings and reminders, false for errors
 enabled  = true            # optional: set false to disable without removing, default true
 [rule.match]
 regex = { field = "command", pattern = '\brg\b[^|]*\|\s*wc\s+-l\b' }
 ```
 
-An optional `sample_field` names the tool-input field echoed as the `> sample` second line of the hint (derived `@`-fields work too). It defaults per tool — Bash: `command`; Read/Edit/Write: `file_path`; Grep/Glob: `pattern`; Agent: `description` — and to no sample line for other tools.
+An optional `sample_field` names the tool-input field echoed as the `> sample` second line of the hint (derived `@`-fields work too). It defaults per tool — Bash: `command`; Read/Edit/Write: `file_path`; Grep/Glob: `pattern`; Agent: `description` — and to no sample line for other tools. `reminder` is non-blocking like `warning` but frames the note as context rather than a problem — that framing lives in the `message` text, not in any prefix toolcheck adds.
 
 ### Predicates
 
