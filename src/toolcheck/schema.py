@@ -108,7 +108,7 @@ class Rule:
     name: str
     tool: str  # "Bash", "Read", "Edit", "Grep", "mcp__*", …
     message: str  # one-line combined diagnosis + remedy
-    severity: Literal["warning", "error"]
+    severity: Literal["warning", "error", "reminder"]
     dedup: bool  # True: fire at most once per (session, rule); False: fire every match
     sample_field: (
         str | None
@@ -129,7 +129,7 @@ _DEFAULT_SAMPLE: dict[str, str] = {
 
 
 _LENGTH_OPS: frozenset[str] = frozenset({">", ">=", "<", "<=", "==", "!="})
-_SEVERITIES: frozenset[str] = frozenset({"warning", "error"})
+_SEVERITIES: frozenset[str] = frozenset({"warning", "error", "reminder"})
 _CROSS_CALL_KINDS: frozenset[str] = frozenset(
     {"duplicate_field_within_session", "adjacent_near_identical"}
 )
@@ -175,11 +175,11 @@ def _integer(x: object, ctx: str) -> int:
     return x
 
 
-def _severity(x: object) -> Literal["warning", "error"]:
+def _severity(x: object) -> Literal["warning", "error", "reminder"]:
     s = "warning" if x is None else _string(x, "severity")
     if s not in _SEVERITIES:
         raise ValueError(f"severity must be one of {sorted(_SEVERITIES)}, got {s!r}")
-    return cast('Literal["warning", "error"]', s)
+    return cast('Literal["warning", "error", "reminder"]', s)
 
 
 def _length_op(x: object, ctx: str) -> Literal[">", ">=", "<", "<=", "==", "!="]:
@@ -265,7 +265,7 @@ def _parse_rule(d: dict[str, object]) -> Rule:
     sample_field = None if sample_raw is None else _string(sample_raw, "sample_field")
     dedup_raw = d.get("dedup")
     if dedup_raw is None:
-        dedup = severity == "warning"
+        dedup = severity != "error"
     elif isinstance(dedup_raw, bool):
         dedup = dedup_raw
     else:

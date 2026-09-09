@@ -152,7 +152,7 @@ def test_every_rule_well_formed(rules_env: RulesEnv):
     rules_env(TOML_BYTES)
     for r in load_catalogue():
         assert r.name and r.tool and r.message
-        assert r.severity in ("warning", "error")
+        assert r.severity in ("warning", "error", "reminder")
 
 
 def test_stateless_rules_compile(rules_env: RulesEnv):
@@ -212,12 +212,22 @@ dedup = false
 
 [rule.match]
 regex = { field = "command", pattern = 'x' }
+
+[[rule]]
+name = "reminder-rule"
+tool = "Bash"
+message = "m"
+severity = "reminder"
+
+[rule.match]
+regex = { field = "command", pattern = 'x' }
 """
     rules = {r.name: r for r in load_toml(toml)}
     assert rules["warn-rule"].dedup is True
     assert rules["error-rule"].dedup is False
     assert rules["error-with-dedup"].dedup is True
     assert rules["warn-no-dedup"].dedup is False
+    assert rules["reminder-rule"].dedup is True
 
 
 def test_sample_field_defaults_per_tool():
