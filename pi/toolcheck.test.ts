@@ -18,7 +18,7 @@ process.env.TOOLCHECK_BIN = bin; // read at module load; must precede the import
 const { default: makeExtension } = await import("./toolcheck.ts");
 
 type Envelope =
-  | { decision: "allow" | "deny"; warnings?: string[]; errors?: string[] }
+  | { decision: "allow" | "deny"; warnings?: string[]; errors?: string[]; reminders?: string[] }
   | "fail";
 type Handler = (event: any, ctx: any) => any;
 
@@ -100,6 +100,19 @@ describe("pi/toolcheck.ts", () => {
 
     // consumed: a second message_end for the same id delivers nothing
     expect(await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx)).toBeUndefined();
+  });
+
+  test("allow + warnings + reminders: both appended in order", async () => {
+    setStub([{ decision: "allow", warnings: ["w"], reminders: ["r"] }]);
+    const { api, handlers } = makePi();
+    makeExtension(api);
+    const ctx = mkCtx();
+
+    await fire(handlers, "tool_call", { toolName: "t0", toolCallId: "c0", input: {} }, ctx);
+
+    const patch = await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx);
+    expect(patch?.message?.content).toHaveLength(2);
+    expect(patch?.message?.content[1]).toEqual({ type: "text", text: "w\n\nr" });
   });
 
   test("deny + warnings: call blocked, message_end on the error toolResult still delivers", async () => {

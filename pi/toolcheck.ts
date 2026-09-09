@@ -2,7 +2,7 @@
 //
 // Intercepts every tool call: spawns `toolcheck check --pi` with the call's
 // input, session id, and current context length. Error-severity rules block
-// the call; warnings are appended to the tool result as model-visible text.
+// the call; warnings and reminders are appended to the tool result as model-visible text.
 // No logic lives here — the CLI owns evaluation; this file only translates
 // its envelope into pi actions.
 //
@@ -43,10 +43,11 @@ interface Envelope {
   decision: "allow" | "deny";
   warnings?: string[];
   errors?: string[];
+  reminders?: string[];
 }
 
 export default function (pi: ExtensionAPI) {
-  const warningsByCall = new Map<string, string[]>();
+  const hintsByCall = new Map<string, string[]>();
   const notifiedSessions = new Set<string>();
 
   const failOpen = (ctx: ExtensionContext, message: string): void => {
@@ -84,8 +85,9 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    if (envelope.warnings?.length) {
-      warningsByCall.set(event.toolCallId, envelope.warnings);
+    const hints = [...(envelope.warnings ?? []), ...(envelope.reminders ?? [])];
+    if (hints.length) {
+      hintsByCall.set(event.toolCallId, hints);
     }
     if (envelope.decision === "deny") {
       return {
@@ -98,13 +100,13 @@ export default function (pi: ExtensionAPI) {
   pi.on("message_end", (event) => {
     const message = event.message;
     if (message.role !== "toolResult") return;
-    const warnings = warningsByCall.get(message.toolCallId);
-    if (!warnings?.length) return;
-    warningsByCall.delete(message.toolCallId);
+    const hints = hintsByCall.get(message.toolCallId);
+    if (!hints?.length) return;
+    hintsByCall.delete(message.toolCallId);
     return {
       message: {
         ...message,
-        content: [...message.content, { type: "text", text: warnings.join("\n\n") }],
+        content: [...message.content, { type: "text", text: hints.join("\n\n") }],
       },
     };
   });
