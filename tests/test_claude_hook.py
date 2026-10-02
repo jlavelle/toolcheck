@@ -138,3 +138,33 @@ regex = { field = "command", pattern = '\\|\\s*(?:bash|sh)\\b' }
     assert "shell-pipe" in additional
     assert spec["permissionDecision"] == "deny"
     assert "curl-pipe-shell" in _str_field(spec, "permissionDecisionReason")
+
+
+BROKEN_SIBLING_TOML = b"""
+[[rule]]
+name = "good"
+tool = "Bash"
+message = "m"
+severity = "warning"
+
+[rule.match]
+regex = { field = "command", pattern = 'zzz' }
+
+[[rule]]
+name = "bad"
+tool = "Bash"
+
+[rule.match]
+regex = { field = "command", pattern = 'zzz' }
+"""
+
+
+def test_unparseable_rule_is_reported_as_context():
+    spec = _run_hook(
+        BROKEN_SIBLING_TOML,
+        {"tool_name": "Bash", "tool_input": {"command": "ls"}},
+    )
+    context = _str_field(spec, "additionalContext")
+    assert "skipped" in context
+    assert "'bad'" in context
+    assert "permissionDecision" not in spec

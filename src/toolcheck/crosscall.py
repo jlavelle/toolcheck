@@ -12,6 +12,7 @@ from __future__ import annotations
 import difflib
 from typing import Mapping
 
+from toolcheck.compile import field_text
 from toolcheck.schema import CrossCallPredicate
 from toolcheck.state import SessionState
 
@@ -35,7 +36,7 @@ def field_value(
 ) -> str | None:
     """The current value of the tracked field, or None when absent."""
     v = tool_input.get(pred.field)
-    return None if v is None else str(v)
+    return None if v is None else field_text(v)
 
 
 def evaluate(

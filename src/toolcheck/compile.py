@@ -14,10 +14,11 @@ tool_input key.
 
 from __future__ import annotations
 
+import json
 import operator
 import re
 from dataclasses import dataclass
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Sized
 
 from toolcheck import bash as _bash
 from toolcheck.schema import (
@@ -75,6 +76,23 @@ def resolve_field(field: str, inp: Mapping[str, object]) -> object | None:
     return inp.get(field)
 
 
+def field_text(value: object) -> str:
+    """JSON text for non-strings, so rules match what their author writes in TOML."""
+    match value:
+        case None:
+            return ""
+        case str():
+            return value
+        case _:
+            return json.dumps(value, ensure_ascii=False)
+
+
+def field_length(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    return len(field_text(value))
+
+
 _OPS: dict[str, Callable[[int, int], bool]] = {
     ">": operator.gt,
     ">=": operator.ge,
@@ -95,8 +113,7 @@ def _compile_predicate(pred: Predicate) -> Matcher:
                 _c: re.Pattern[str] = compiled,
                 _f: str = f,
             ) -> bool:
-                val = resolve_field(_f, env.tool_input) or ""
-                return bool(_c.search(str(val)))
+                return bool(_c.search(field_text(resolve_field(_f, env.tool_input))))
 
             return _regex
 
@@ -116,7 +133,7 @@ def _compile_predicate(pred: Predicate) -> Matcher:
                 _members: frozenset[str] = members,
             ) -> bool:
                 val = resolve_field(_f, env.tool_input)
-                return val is not None and str(val) in _members
+                return val is not None and field_text(val) in _members
 
             return _in
 
@@ -129,9 +146,7 @@ def _compile_predicate(pred: Predicate) -> Matcher:
                 _v: int = v,
                 _cmp: Callable[[int, int], bool] = cmp,
             ) -> bool:
-                val = resolve_field(_f, env.tool_input)
-                n = len(str(val)) if val is not None else 0
-                return _cmp(n, _v)
+                return _cmp(field_length(resolve_field(_f, env.tool_input)), _v)
 
             return _length
 

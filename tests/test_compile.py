@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from hypothesis import given
+from hypothesis import strategies as st
 
 from strategies import bash_predicates, bash_tool_inputs, context_lengths, make_rule
-from toolcheck.compile import Env, compile_rule
+from toolcheck.compile import Env, compile_rule, field_length, field_text
 from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
@@ -163,3 +166,53 @@ def test_truncate_without_tee_parity(cmd: str, expected: bool):
 )
 def test_grep_unscoped_parity(inp: dict[str, object], expected: bool):
     assert compile_rule(_grep_unscoped_rule())(Env(inp)) is expected
+
+
+def _json_scalars() -> st.SearchStrategy[object]:
+    return st.one_of(
+        st.booleans(),
+        st.integers(min_value=-(10**9), max_value=10**9),
+        st.floats(allow_nan=False, allow_infinity=False),
+        st.text(max_size=20),
+    )
+
+
+def _json_values() -> st.SearchStrategy[object]:
+    return st.recursive(
+        _json_scalars(),
+        lambda children: st.one_of(
+            st.lists(children, max_size=4),
+            st.dictionaries(st.text(max_size=8), children, max_size=4),
+        ),
+        max_leaves=8,
+    )
+
+
+@given(_json_values())
+def test_field_text_is_json_except_for_strings(v: object):
+    text = field_text(v)
+    if isinstance(v, str):
+        assert text == v
+    else:
+        assert json.loads(text) == v
+
+
+def test_field_text_none_is_empty():
+    assert field_text(None) == ""
+
+
+@given(st.one_of(st.text(max_size=20), st.lists(st.integers(), max_size=8)))
+def test_field_length_counts_items_of_sized_values(v: str | list[int]):
+    assert field_length(v) == len(v)
+
+
+def test_field_length_of_scalars_is_text_length():
+    assert field_length(12345) == 5
+    assert field_length(True) == 4
+
+
+def test_in_matches_booleans_as_json_text():
+    rule = make_rule(InPredicate(field="replace_all", values=("true",)))
+    assert compile_rule(rule)(Env({"replace_all": True})) is True
+    pythonic = make_rule(InPredicate(field="replace_all", values=("True",)))
+    assert compile_rule(pythonic)(Env({"replace_all": True})) is False

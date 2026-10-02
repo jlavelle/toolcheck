@@ -108,6 +108,8 @@ Include disabled rules with `--all`.
 
 Validate the catalogue after editing — `toolcheck lint-rules` compiles every stateless rule, resolves derived field names, and rejects nested cross-call matches. It exits 1 and prints one line per problem when anything is broken.
 
+A file or rule that fails to parse is skipped, so the rest of the catalogue keeps running. The hooks tell the model which item was skipped and why, once per session (in `additionalContext` under `--claude`, in `warnings` under `--pi`); `list` and plain `check` print it on stderr, and `lint-rules` lists it as a problem.
+
 ## Rule format
 
 A rule names the tool it inspects, the hint to show, and a `match` predicate. Start from `examples/bash.toml` (`grep.toml`, `read.toml`, and `write.toml` cover the other tools):
@@ -137,7 +139,7 @@ A predicate tests a `field` of the tool input. Compose them freely with `not`, `
 | absent    | `{ absent = "path" }`                                                  | the field is missing                      |
 | equals    | `{ equals = { field = "@last_pipe_command", value = "head" } }`        | the field equals the value                |
 | in        | `{ in = { field = "@last_pipe_command", values = ["head", "tail"] } }` | the field is one of the values            |
-| length    | `{ length = { field = "content", op = ">", value = 1500 } }`           | the field's length compares true          |
+| length    | `{ length = { field = "content", op = ">", value = 1500 } }`           | the field's length (characters of a string, items of a list or object) compares true |
 | context_length | `{ context_length = { op = ">", value = 120000 } }`               | the session's context length compares true (see below) |
 | not       | `{ not = <predicate> }`                                                | the inner predicate fails                 |
 | all       | `{ all = [ <predicate>, … ] }`                                         | every operand holds                       |
@@ -146,6 +148,10 @@ A predicate tests a `field` of the tool input. Compose them freely with `not`, `
 #### Length ops
 
 The `length` predicate's `op` field accepts: `>`, `>=`, `<`, `<=`, `==`, `!=`.
+
+#### Non-string fields
+
+`regex`, `equals`, and `in` see a non-string value as its JSON text: booleans are `true`/`false`, numbers their decimal form, lists and objects JSON. `{ equals = { field = "replace_all", value = "true" } }` matches an `Edit` with `replace_all` set.
 
 #### Context length
 

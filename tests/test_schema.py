@@ -25,8 +25,9 @@ from toolcheck.schema import (
     cross_call_of,
     is_stateless,
     load_catalogue,
-    load_toml,
+    load_errors,
     parse_predicate,
+    parse_rules,
 )
 
 TOML_BYTES = b"""
@@ -222,7 +223,7 @@ severity = "reminder"
 [rule.match]
 regex = { field = "command", pattern = 'x' }
 """
-    rules = {r.name: r for r in load_toml(toml)}
+    rules = {r.name: r for r in parse_rules(toml, Path("x.toml")).rules}
     assert rules["warn-rule"].dedup is True
     assert rules["error-rule"].dedup is False
     assert rules["error-with-dedup"].dedup is True
@@ -250,7 +251,7 @@ severity = "warning"
 [rule.match]
 regex = { field = "command", pattern = 'x' }
 """
-    rules = {r.name: r for r in load_toml(toml)}
+    rules = {r.name: r for r in parse_rules(toml, Path("x.toml")).rules}
     assert rules["bash-rule"].sample_field == "command"
     assert rules["unknown-tool-rule"].sample_field is None
 
@@ -286,7 +287,7 @@ enabled = true
 [rule.match]
 regex = { field = "command", pattern = 'x' }
 """
-    rules = {r.name: r for r in load_toml(toml)}
+    rules = {r.name: r for r in parse_rules(toml, Path("x.toml")).rules}
     assert rules["on-by-default"].enabled is True
     assert rules["disabled"].enabled is False
     assert rules["explicitly-enabled"].enabled is True
@@ -316,3 +317,43 @@ regex = { field = "command", pattern = 'x' }
     names = [r.name for r in load_catalogue()]
     assert "rule-active" in names
     assert "rule-disabled" not in names
+
+
+BROKEN_RULE_TOML = b"""
+[[rule]]
+name = "good"
+tool = "Read"
+message = "m"
+[rule.match]
+present = "file_path"
+
+[[rule]]
+name = "bad"
+tool = "Read"
+[rule.match]
+present = "file_path"
+"""
+
+
+def test_parse_rules_keeps_siblings_of_a_bad_rule():
+    cat = parse_rules(BROKEN_RULE_TOML, Path("x.toml"))
+    assert [r.name for r in cat.rules] == ["good"]
+    assert len(cat.errors) == 1
+    assert cat.errors[0].path == Path("x.toml")
+    assert "'bad'" in cat.errors[0].message
+    assert "'message'" in cat.errors[0].message
+
+
+def test_parse_rules_undecodable_file_is_one_error():
+    cat = parse_rules(b"[[rule]\nname = ", Path("x.toml"))
+    assert cat.rules == ()
+    assert len(cat.errors) == 1
+
+
+def test_catalogue_survives_a_broken_sibling_file(rules_env: RulesEnv):
+    d = rules_env(TOML_BYTES)
+    (d / "zz-broken.toml").write_bytes(b"not toml at all [")
+    clear_rule_cache()
+    assert [r.name for r in load_catalogue()] == ["read-already-read"]
+    errors = load_errors()
+    assert [e.path for e in errors] == [d / "zz-broken.toml"]

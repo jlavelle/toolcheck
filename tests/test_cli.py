@@ -10,6 +10,7 @@ import pytest
 
 from conftest import RulesEnv
 from toolcheck.cli import build_parser
+from toolcheck.schema import clear_rule_cache
 
 TOML_BYTES = b"""
 [[rule]]
@@ -261,3 +262,27 @@ regex = { field = "command", pattern = 'y' }
 """)
     assert _run(["lint-rules"]) == 1
     assert "duplicate rule name" in capsys.readouterr().err
+
+
+def test_lint_rules_reports_unparseable_file(
+    rules_dir: Path, capsys: pytest.CaptureFixture[str]
+):
+    (rules_dir / "zz-broken.toml").write_bytes(b'[[rule]]\nname = "x"\ntool = "Bash"\n')
+    clear_rule_cache()
+    assert _run(["lint-rules"]) == 1
+    err = capsys.readouterr().err
+    assert "zz-broken.toml" in err
+
+
+def test_check_still_fires_with_a_broken_sibling_file(
+    rules_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    (rules_dir / "zz-broken.toml").write_bytes(b"not toml [")
+    clear_rule_cache()
+    f = _write(
+        tmp_path, {"tool_name": "Bash", "tool_input": {"command": "rg x | wc -l"}}
+    )
+    assert _run(["check", f]) == 1
+    out, err = capsys.readouterr()
+    assert "rg-pipe-wc" in out
+    assert "zz-broken.toml" in err

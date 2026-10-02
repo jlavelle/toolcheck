@@ -38,9 +38,15 @@ import os
 import sys
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Callable, Mapping, cast
+from typing import Callable, Mapping, Sequence, cast
 
-from toolcheck.compile import Env, compile_rule, known_derived_fields, resolve_field
+from toolcheck.compile import (
+    Env,
+    compile_rule,
+    field_text,
+    known_derived_fields,
+    resolve_field,
+)
 from toolcheck.crosscall import evaluate as eval_cross_call
 from toolcheck.crosscall import field_value
 from toolcheck.pi import normalise
@@ -50,6 +56,7 @@ from toolcheck.schema import (
     is_stateless,
     load_all_rules,
     load_catalogue,
+    load_errors,
     predicate_fields,
 )
 from toolcheck.state import SessionState, load_state, save_state, state_path
@@ -80,10 +87,9 @@ def _sample(rule: Rule, tool_input: Mapping[str, object]) -> str:
     if rule.sample_field is None:
         return ""
     try:
-        sample = resolve_field(rule.sample_field, tool_input)
+        return field_text(resolve_field(rule.sample_field, tool_input))
     except ValueError:
         return ""
-    return str(sample) if sample is not None else ""
 
 
 def _eval_stateless(rule: Rule, env: Env) -> bool:
@@ -153,6 +159,8 @@ def evaluate_call(
 
 def _cmd_list(args: argparse.Namespace) -> int:
     tool_filter = cast("str | None", args.tool)
+    for notice in _load_notices():
+        print(notice, file=sys.stderr)
     source = load_all_rules() if args.all else load_catalogue()
     rules = [r for r in source if tool_filter is None or r.tool == tool_filter]
     rules.sort(key=lambda r: (r.tool, r.name))
@@ -219,6 +227,9 @@ def _cmd_check(args: argparse.Namespace) -> int:
     if args.pi:
         return _check_pi(payload, tool, tool_input)
 
+    for notice in _load_notices():
+        print(notice, file=sys.stderr)
+
     fired, _ = evaluate_call(
         tool,
         tool_input,
@@ -240,17 +251,22 @@ def _cmd_check(args: argparse.Namespace) -> int:
     return 1
 
 
+def _load_notices() -> list[str]:
+    return [f"[toolcheck] skipped {e.path}: {e.message}" for e in load_errors()]
+
+
 def _run_hook(
     payload: dict[str, object],
     agent: str,
     tool: str,
     tool_input: dict[str, object],
     context_length: int | None,
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str]]:
     """Shared hook core: evaluate the call, persist state, render hints.
 
     Returns rendered hint strings partitioned by severity (warnings, errors,
-    reminders). ``agent`` is the
+    reminders) plus notices about rules that failed to load, each shown once
+    per session like a warning. ``agent`` is the
     state-directory key ("claude-code" or "pi") and also gives the payload its
     session/context semantics. Pure apart from state I/O.
     """
@@ -266,13 +282,21 @@ def _run_hook(
         tool, tool_input, state, use_dedup, now, load_catalogue(), context_length
     )
 
+    notices: list[str] = []
+    for notice in _load_notices():
+        if use_dedup and next_state.has_fired(notice):
+            continue
+        notices.append(notice)
+        if use_dedup:
+            next_state = next_state.with_fired(notice, now)
+
     if path is not None:
         save_state(path, next_state)
 
     warnings = [render(r, tool_input) for r in fired if r.severity == "warning"]
     errors = [render(r, tool_input) for r in fired if r.severity == "error"]
     reminders = [render(r, tool_input) for r in fired if r.severity == "reminder"]
-    return warnings, errors, reminders
+    return warnings, errors, reminders, notices
 
 
 def _check_claude(
@@ -283,15 +307,15 @@ def _check_claude(
     transcript_path = _as_str(payload.get("transcript_path"))
     context_length = read_context_length(transcript_path) if transcript_path else None
 
-    warnings, errors, reminders = _run_hook(
+    warnings, errors, reminders, notices = _run_hook(
         payload, "claude-code", tool, tool_input, context_length
     )
 
     output: dict[str, object] = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
     spec = cast("dict[str, object]", output["hookSpecificOutput"])
 
-    if warnings or reminders:
-        spec["additionalContext"] = "\n\n".join([*warnings, *reminders])
+    if warnings or reminders or notices:
+        spec["additionalContext"] = "\n\n".join([*warnings, *reminders, *notices])
 
     if errors:
         spec["permissionDecision"] = "deny"
@@ -309,20 +333,24 @@ def _check_pi(
     context_length_raw = payload.get("context_length")
     if context_length_raw is None:
         context_length = None
-    elif isinstance(context_length_raw, int) and not isinstance(context_length_raw, bool):
+    elif isinstance(context_length_raw, int) and not isinstance(
+        context_length_raw, bool
+    ):
         context_length = context_length_raw
     else:
         print("error: 'context_length' must be an integer", file=sys.stderr)
         return 2
 
     tool, tool_input = normalise(tool, tool_input)
-    warnings, errors, reminders = _run_hook(payload, "pi", tool, tool_input, context_length)
+    warnings, errors, reminders, notices = _run_hook(
+        payload, "pi", tool, tool_input, context_length
+    )
 
     print(
         json.dumps(
             {
                 "decision": "deny" if errors else "allow",
-                "warnings": warnings,
+                "warnings": [*warnings, *notices],
                 "errors": errors,
                 "reminders": reminders,
             }
@@ -351,7 +379,7 @@ def lint_rule(rule: Rule) -> list[str]:
     return issues
 
 
-def lint_rules(rules: list[Rule]) -> list[str]:
+def lint_rules(rules: Sequence[Rule]) -> list[str]:
     """Catalogue-wide problems, one human-readable line each."""
     problems = [
         f"duplicate rule name: {name!r} ({n} definitions; last wins)"
@@ -365,7 +393,7 @@ def lint_rules(rules: list[Rule]) -> list[str]:
 
 def _cmd_lint_rules(args: argparse.Namespace) -> int:
     rules = load_all_rules()
-    problems = lint_rules(rules)
+    problems = [f"{e.path}: {e.message}" for e in load_errors()] + lint_rules(rules)
     if not problems:
         print(f"ok: {len(rules)} rules")
         return 0

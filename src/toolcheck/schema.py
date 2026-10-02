@@ -21,7 +21,7 @@ import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Literal, Union, cast
+from typing import Iterable, Iterator, Literal, Sequence, Union, cast
 
 
 @dataclass(frozen=True)
@@ -290,11 +290,48 @@ def _parse_rule(d: dict[str, object]) -> Rule:
     )
 
 
-def load_toml(data: bytes) -> list[Rule]:
-    """Parse all rules from the bytes of a single TOML file."""
-    parsed = tomllib.loads(data.decode("utf-8"))
-    rules = _seq(parsed.get("rule", []), "rule")
-    return [_parse_rule(_mapping(r, "rule")) for r in rules]
+@dataclass(frozen=True)
+class LoadError:
+    path: Path
+    message: str
+
+
+@dataclass(frozen=True)
+class Catalogue:
+    """Rules that parsed plus the problems met along the way, in load order."""
+
+    rules: tuple[Rule, ...]
+    errors: tuple[LoadError, ...]
+
+
+def _rule_label(index: int, raw: object) -> str:
+    name = cast("dict[str, object]", raw).get("name") if isinstance(raw, dict) else None
+    return f"rule[{index}] ({name!r})" if isinstance(name, str) else f"rule[{index}]"
+
+
+def _problem(e: Exception) -> str:
+    return f"missing required key {e.args[0]!r}" if isinstance(e, KeyError) else str(e)
+
+
+def parse_rules(data: bytes, path: Path) -> Catalogue:
+    """Parse one TOML file, keeping every well-formed rule and recording the rest.
+
+    A file that fails to decode yields no rules and one error. A rule that
+    fails to parse yields one error and leaves its siblings intact.
+    """
+    try:
+        parsed = tomllib.loads(data.decode("utf-8"))
+        raws = _seq(parsed.get("rule", []), "rule")
+    except (ValueError, KeyError) as e:
+        return Catalogue((), (LoadError(path, _problem(e)),))
+    rules: list[Rule] = []
+    errors: list[LoadError] = []
+    for i, raw in enumerate(raws):
+        try:
+            rules.append(_parse_rule(_mapping(raw, "rule")))
+        except (ValueError, KeyError) as e:
+            errors.append(LoadError(path, f"{_rule_label(i, raw)}: {_problem(e)}"))
+    return Catalogue(tuple(rules), tuple(errors))
 
 
 def _rules_dirs() -> list[Path]:
@@ -316,14 +353,16 @@ def _rules_dirs() -> list[Path]:
 
 
 @functools.cache
-def _load_all_rules() -> list[Rule]:
+def _load_all_rules() -> Catalogue:
     """Load every *.toml across the config rules directories, in load order without deduplication.
 
     Load order is directory order (TOOLCHECK_RULES_DIRS left to right, then
-    TOOLCHECK_RULES_DIR), then filename order within each directory. Memoised;
-    call cache_clear() to invalidate.
+    TOOLCHECK_RULES_DIR), then filename order within each directory. A file
+    or rule that fails to parse becomes an error rather than aborting the
+    load. Memoised; call cache_clear() to invalidate.
     """
     rules: list[Rule] = []
+    errors: list[LoadError] = []
     for root in _rules_dirs():
         if not root.is_dir():
             continue
@@ -331,11 +370,18 @@ def _load_all_rules() -> list[Rule]:
             p.name for p in root.iterdir() if p.is_file() and p.name.endswith(".toml")
         )
         for name in toml_names:
-            rules.extend(load_toml((root / name).read_bytes()))
-    return rules
+            path = root / name
+            try:
+                parsed = parse_rules(path.read_bytes(), path)
+            except OSError as e:
+                errors.append(LoadError(path, str(e)))
+                continue
+            rules.extend(parsed.rules)
+            errors.extend(parsed.errors)
+    return Catalogue(tuple(rules), tuple(errors))
 
 
-def _dedup_last_wins(rules: list[Rule]) -> list[Rule]:
+def _dedup_last_wins(rules: Iterable[Rule]) -> list[Rule]:
     """Collapse rules sharing a name, keeping the last definition in load order and giving it that position."""
     by_name: dict[str, Rule] = {}
     for rule in rules:
@@ -346,12 +392,17 @@ def _dedup_last_wins(rules: list[Rule]) -> list[Rule]:
 
 def load_catalogue() -> list[Rule]:
     """Enabled rules, last-wins by name. Memoised via _load_all_rules."""
-    return [r for r in _dedup_last_wins(_load_all_rules()) if r.enabled]
+    return [r for r in _dedup_last_wins(_load_all_rules().rules) if r.enabled]
 
 
-def load_all_rules() -> list[Rule]:
+def load_errors() -> Sequence[LoadError]:
+    """Files and rules that failed to parse on the last load. Memoised via _load_all_rules."""
+    return _load_all_rules().errors
+
+
+def load_all_rules() -> Sequence[Rule]:
     """All rules including disabled, in load order without dedup (for linting). Memoised via _load_all_rules."""
-    return _load_all_rules()
+    return _load_all_rules().rules
 
 
 def clear_rule_cache() -> None:

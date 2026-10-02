@@ -15,9 +15,10 @@ def _run_hook(
     payload: dict[str, object],
     *,
     state_dir: Path | None = None,
+    rules_dir: Path | None = None,
 ) -> dict[str, object]:
     """Run the hook subprocess and return its envelope dict."""
-    rules_dir = Path(tempfile.mkdtemp())
+    rules_dir = Path(tempfile.mkdtemp()) if rules_dir is None else rules_dir
     (rules_dir / "test.toml").write_bytes(rules_toml)
     env = {**os.environ, "TOOLCHECK_RULES_DIR": str(rules_dir)}
     if state_dir is not None:
@@ -200,3 +201,54 @@ context_length = { op = ">", value = 0 }
     )
     assert result.returncode == 2
     assert "context_length" in result.stderr
+
+
+BROKEN_SIBLING_TOML = b"""
+[[rule]]
+name = "good"
+tool = "Bash"
+message = "m"
+severity = "warning"
+
+[rule.match]
+regex = { field = "command", pattern = 'zzz' }
+
+[[rule]]
+name = "bad"
+tool = "Bash"
+
+[rule.match]
+regex = { field = "command", pattern = 'zzz' }
+"""
+
+
+def test_unparseable_rule_is_reported_as_warning():
+    out = _run_hook(
+        BROKEN_SIBLING_TOML,
+        {"tool_name": "bash", "tool_input": {"command": "ls"}},
+    )
+    assert out["decision"] == "allow"
+    warnings = cast("list[str]", out["warnings"])
+    assert any("skipped" in w and "'bad'" in w for w in warnings)
+
+
+def test_unparseable_rule_notice_is_deduped_per_session(tmp_path: Path):
+    payload: dict[str, object] = {
+        "tool_name": "bash",
+        "tool_input": {"command": "ls"},
+        "session_id": "notice-dedup",
+    }
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+    runs = [
+        cast(
+            "list[str]",
+            _run_hook(
+                BROKEN_SIBLING_TOML, payload, state_dir=tmp_path, rules_dir=rules_dir
+            )["warnings"],
+        )
+        for _ in range(2)
+    ]
+    first, second = runs
+    assert any("skipped" in w for w in first)
+    assert not any("skipped" in w for w in second)
