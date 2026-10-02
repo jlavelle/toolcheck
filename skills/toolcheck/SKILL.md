@@ -96,7 +96,7 @@ These hold in the installed `toolcheck` and will not be reported by `lint-rules`
 - `cross_call` must be the whole `match`. You cannot combine it with a `regex` to say "duplicate Read of a `.hs` file". `lint-rules` rejects nesting.
 - `context_length` is unknown under plain `check` and on the first call of a session, and a comparison against unknown is `False`. Under `--claude` it is estimated from the transcript and lags the current turn by about one message.
 - `@last_pipe_command` is the basename of the first token of the rightmost `|` segment, with `VAR=x` prefixes stripped. `||` is not a pipe. It is the only derived field; any other `@name` fails lint.
-- Under pi, `path` is renamed to `file_path` before evaluation and pi's `edit` sends no `old_string`. A `cross_call` on `field = "path"` never fires under pi and lint does not flag it. Target `file_path`.
+- Under pi, `path` is renamed to `file_path` before evaluation. pi's `edit` sends an `edits` list, not a single string, so toolcheck joins the `newText` values into a synthetic `new_string`; a rule on `new_string` fires under both agents. `old_string` is never synthesised, so rules on it never fire under pi. A `cross_call` on `field = "path"` never fires under pi either, and lint does not flag it. Target `file_path`.
 - Dedup makes a warning fire once per session, so a rule you are iterating on in a live session seems to stop working. Set `TOOLCHECK_NO_DEDUP=1` in the hook's environment while developing, or test with plain `check`.
 
 ## Cross-call rules

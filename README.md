@@ -64,11 +64,11 @@ pi tool names and input keys are mapped to the canonical Claude-shaped vocabular
 | `bash` | `Bash` | none (`command` matches) |
 | `read` | `Read` | `path` → `file_path`; `offset`/`limit` pass through |
 | `write` | `Write` | `path` → `file_path` |
-| `edit` | `Edit` | `path` → `file_path`; `edits` passes through |
+| `edit` | `Edit` | `path` → `file_path`; `edits` passes through, and its `newText` values are joined into a synthetic `new_string` |
 | `grep` | `Grep` | none (`pattern` matches) |
 | anything else | unchanged | unchanged |
 
-Rules on `old_string` won't fire under pi: pi's `edit` tool has no single-string analog. For cross-tool coverage write rules that target `file_path` (mapped from `path`) instead.
+The synthetic `new_string` means a rule written against Claude's single-string edit fires for pi's list-of-edits too. It is `"\n".join(newText for each edit)` and is only added when no `new_string` is already present. Rules on `old_string` still won't fire: pi's `edit` exposes only the per-edit `oldText`, which is not joined. For cross-tool coverage of removed text, target `file_path` (mapped from `path`) instead.
 
 The same applies to `cross_call` fields: observations are recorded under the canonical field name after normalisation, so `cross_call = { field = "path" }` on `Read`/`Write`/`Edit` reads nothing and silently never fires. Target `file_path`. `toolcheck lint-rules` will not flag it — cross-call fields aren't validated (only `@`-derived fields are).
 

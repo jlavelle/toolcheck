@@ -172,6 +172,40 @@ cross_call = { kind = "duplicate_field_within_session", field = "file_path" }
     assert warnings and "read-already-read" in warnings[0]
 
 
+def test_pi_edit_new_string_is_synthesised_for_rules():
+    new_string_toml = b"""
+[[rule]]
+name = "no-comment"
+tool = "Edit"
+message = "comment detected"
+severity = "warning"
+
+[rule.match]
+regex = { field = "new_string", pattern = '-- note' }
+"""
+    fired = _run_hook(
+        new_string_toml,
+        {
+            "tool_name": "edit",
+            "tool_input": {
+                "path": "/x.hs",
+                "edits": [{"oldText": "a", "newText": "x = 1 -- note"}],
+            },
+        },
+    )
+    warnings = cast("list[str]", fired["warnings"])
+    assert warnings and "no-comment" in warnings[0]
+
+    clean = _run_hook(
+        new_string_toml,
+        {
+            "tool_name": "edit",
+            "tool_input": {"path": "/x.hs", "edits": [{"oldText": "a", "newText": "x = 1"}]},
+        },
+    )
+    assert clean["warnings"] == []
+
+
 def test_non_integer_context_length_is_usage_error():
     error_toml = b"""
 [[rule]]

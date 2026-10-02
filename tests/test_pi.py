@@ -29,6 +29,42 @@ def test_write_and_edit_paths_map():
     )
 
 
+def test_edit_synthesises_new_string_from_edits():
+    edits = [
+        {"oldText": "a", "newText": "x = 1"},
+        {"oldText": "b", "newText": "-- note"},
+    ]
+    canonical, inp = normalise("edit", {"path": "/x.hs", "edits": edits})
+    assert canonical == "Edit"
+    assert inp["file_path"] == "/x.hs"
+    assert inp["edits"] == edits
+    assert inp["new_string"] == "x = 1\n-- note"
+
+
+def test_edit_existing_new_string_is_not_overwritten():
+    _, inp = normalise(
+        "edit",
+        {"path": "/x", "new_string": "given", "edits": [{"newText": "ignored"}]},
+    )
+    assert inp["new_string"] == "given"
+
+
+def test_edit_without_new_texts_has_no_new_string():
+    cases: list[object] = [None, [], "nope", [{}], [{"oldText": "a"}], [1, 2]]
+    for edits in cases:
+        _, inp = normalise("edit", {"path": "/x", "edits": edits})
+        assert "new_string" not in inp
+    _, inp = normalise("edit", {"path": "/x"})
+    assert "new_string" not in inp
+
+
+def test_new_string_only_synthesised_for_pi_edit():
+    edits = [{"newText": "-- note"}]
+    for tool in ("read", "write", "Edit", "find"):
+        _, inp = normalise(tool, {"path": "/x", "edits": edits})
+        assert "new_string" not in inp
+
+
 def test_bash_and_grep_names_map_inputs_pass_through():
     assert normalise("bash", {"command": "ls", "timeout": 5}) == (
         "Bash",
@@ -96,3 +132,12 @@ def test_unknown_tool_passes_through_identically_property(
     tool: str, tool_input: dict[str, int]
 ):
     assert normalise(tool, tool_input) == (tool, tool_input)
+
+
+@given(edits=st.lists(st.fixed_dictionaries({"newText": st.text()})))
+def test_edit_synthetic_new_string_is_the_joined_new_texts(edits: list[dict[str, str]]):
+    _, inp = normalise("edit", {"path": "/x", "edits": edits})
+    if edits:
+        assert inp["new_string"] == "\n".join(e["newText"] for e in edits)
+    else:
+        assert "new_string" not in inp
