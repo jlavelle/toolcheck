@@ -90,6 +90,12 @@ Cross-call rules fire every recurrence (not subject to dedup) and need session s
 
 Rules are TOML files in `~/.config/toolcheck/rules/`. Override the location with `$TOOLCHECK_RULES_DIRS`, a comma-separated list of directories (`$TOOLCHECK_RULES_DIR`, singular, is still honoured for backwards compatibility). See the `examples/` for ideas to get started.
 
+`skills/toolcheck/` is an agent skill that teaches Claude Code and pi how to write and test rules. Symlink it into your skills directory:
+
+```sh
+ln -s "$PWD/skills/toolcheck" ~/.claude/skills/toolcheck
+```
+
 Rules sharing a name are deduplicated last-wins, so a later directory can override an earlier one's rule. Load order is directory order (`$TOOLCHECK_RULES_DIRS` left to right, then `$TOOLCHECK_RULES_DIR`), then filename order within each directory.
 
 Browse active rule names:
