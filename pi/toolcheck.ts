@@ -46,9 +46,18 @@ interface Envelope {
   reminders?: string[];
 }
 
+const rootCallId = (toolCallId: string): string => toolCallId.split("/", 1)[0];
+
 export default function (pi: ExtensionAPI) {
   const hintsByCall = new Map<string, string[]>();
   const notifiedSessions = new Set<string>();
+
+  const addHints = (toolCallId: string, hints: string[]): void => {
+    const root = rootCallId(toolCallId);
+    const bucket = hintsByCall.get(root) ?? [];
+    for (const hint of hints) if (!bucket.includes(hint)) bucket.push(hint);
+    if (bucket.length) hintsByCall.set(root, bucket);
+  };
 
   const failOpen = (ctx: ExtensionContext, message: string): void => {
     const id = ctx.sessionManager.getSessionId();
@@ -85,15 +94,13 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    const hints = [...(envelope.warnings ?? []), ...(envelope.reminders ?? [])];
-    if (hints.length) {
-      hintsByCall.set(event.toolCallId, hints);
-    }
+    addHints(event.toolCallId, [...(envelope.warnings ?? []), ...(envelope.reminders ?? [])]);
     if (envelope.decision === "deny") {
-      return {
-        block: true,
-        reason: (envelope.errors ?? ["(no reason)"]).join("\n\n"),
-      };
+      const reason = (envelope.errors ?? ["(no reason)"]).join("\n\n");
+      if (event.parentToolCallId) {
+        addHints(event.toolCallId, [`Blocked nested ${event.toolName} call:\n${reason}`]);
+      }
+      return { block: true, reason };
     }
   });
 

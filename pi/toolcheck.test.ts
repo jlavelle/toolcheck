@@ -77,6 +77,11 @@ process.stdin.on("end", () => {
   chmodSync(bin, 0o755);
 };
 
+const lcg = (seed: number) => () => {
+  seed = (seed * 1103515245 + 12345) % 2 ** 31;
+  return seed / 2 ** 31;
+};
+
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 describe("pi/toolcheck.ts", () => {
@@ -157,6 +162,92 @@ describe("pi/toolcheck.ts", () => {
     expect(patch?.message?.content[1]).toEqual({ type: "text", text: "w" });
   });
 
+  test("nested calls: hints delivered on the parent's toolResult, none on the nested id", async () => {
+    setStub([{ decision: "allow" }, { decision: "allow", warnings: ["w1"] }, { decision: "allow", reminders: ["r2"] }]);
+    const { api, handlers } = makePi();
+    makeExtension(api);
+    const ctx = mkCtx();
+
+    await fire(handlers, "tool_call", { toolName: "t0", toolCallId: "c0", input: {} }, ctx);
+    await fire(handlers, "tool_call", { toolName: "t1", toolCallId: "c0/1", parentToolCallId: "c0", input: {} }, ctx);
+    await fire(handlers, "tool_call", { toolName: "t2", toolCallId: "c0/1/1", parentToolCallId: "c0/1", input: {} }, ctx);
+
+    expect(await fire(handlers, "message_end", { message: toolResultMessage("c0/1") }, ctx)).toBeUndefined();
+
+    const patch = await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx);
+    expect(patch?.message?.content).toHaveLength(2);
+    expect(patch?.message?.content[1]).toEqual({ type: "text", text: "w1\n\nr2" });
+    expect(await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx)).toBeUndefined();
+  });
+
+  test("nested deny: blocked, and the reason surfaces on the parent even if the script swallowed it", async () => {
+    setStub([{ decision: "allow" }, { decision: "deny", errors: ["[e1] no"] }, { decision: "deny", errors: ["[e1] no"] }]);
+    const { api, handlers } = makePi();
+    makeExtension(api);
+    const ctx = mkCtx();
+
+    await fire(handlers, "tool_call", { toolName: "t0", toolCallId: "c0", input: {} }, ctx);
+    const nested = { toolName: "t1", toolCallId: "c0/1", parentToolCallId: "c0", input: {} };
+    expect(await fire(handlers, "tool_call", nested, ctx)).toEqual({ block: true, reason: "[e1] no" });
+    await fire(handlers, "tool_call", { ...nested, toolName: "t2", toolCallId: "c0/2" }, ctx);
+
+    const patch = await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx);
+    expect(patch?.message?.content[1]).toEqual({
+      type: "text",
+      text: "Blocked nested t1 call:\n[e1] no\n\nBlocked nested t2 call:\n[e1] no",
+    });
+  });
+
+  test("top-level deny: reason is not repeated as a hint", async () => {
+    setStub([{ decision: "deny", errors: ["[e1] no"] }]);
+    const { api, handlers } = makePi();
+    makeExtension(api);
+    const ctx = mkCtx();
+
+    await fire(handlers, "tool_call", { toolName: "t0", toolCallId: "c0", input: {} }, ctx);
+    expect(await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx)).toBeUndefined();
+  });
+
+  test("property: over random call trees every distinct hint reaches its root exactly once", async () => {
+    const rand = lcg(20261002);
+    const n = 80;
+    const warningsOf = Array.from({ length: n }, (_, i) => (rand() < 0.5 ? [`w${i % 5}`] : []));
+    setStub(warningsOf.map((warnings) => ({ decision: "allow", warnings })));
+    const { api, handlers } = makePi();
+    makeExtension(api);
+    const ctx = mkCtx();
+
+    const ids: string[] = [];
+    const expected = new Map<string, string[]>();
+    for (let i = 0; i < n; i++) {
+      const parent = ids.length && rand() < 0.7 ? ids[Math.floor(rand() * ids.length)] : undefined;
+      const id = parent ? `${parent}/${i}` : `c${i}`;
+      ids.push(id);
+      await fire(
+        handlers,
+        "tool_call",
+        { toolName: `t${i}`, toolCallId: id, input: {}, ...(parent ? { parentToolCallId: parent } : {}) },
+        ctx,
+      );
+      const root = id.split("/")[0];
+      const bucket = expected.get(root) ?? [];
+      for (const hint of warningsOf[i]) if (!bucket.includes(hint)) bucket.push(hint);
+      expected.set(root, bucket);
+    }
+
+    for (const id of ids) {
+      if (id.includes("/")) {
+        expect(await fire(handlers, "message_end", { message: toolResultMessage(id) }, ctx)).toBeUndefined();
+      }
+    }
+    for (const [root, hints] of expected) {
+      const patch = await fire(handlers, "message_end", { message: toolResultMessage(root) }, ctx);
+      if (hints.length) expect(patch?.message?.content[1]).toEqual({ type: "text", text: hints.join("\n\n") });
+      else expect(patch).toBeUndefined();
+      expect(await fire(handlers, "message_end", { message: toolResultMessage(root) }, ctx)).toBeUndefined();
+    }
+  });
+
   test("stub exits non-zero: fail open", async () => {
     setStub(["fail"]);
     const { api, handlers } = makePi();
@@ -169,13 +260,7 @@ describe("pi/toolcheck.ts", () => {
   });
 
   test("mixed allow/deny/fail: each warning list delivered exactly once", async () => {
-    const rand = (() => {
-      let seed = 20260826;
-      return () => {
-        seed = (seed * 1103515245 + 12345) % 2 ** 31;
-        return seed / 2 ** 31;
-      };
-    })();
+    const rand = lcg(20260826);
     const n = 60;
     const envelopes: Envelope[] = Array.from({ length: n }, () => {
       const roll = rand();

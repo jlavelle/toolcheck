@@ -38,6 +38,8 @@ cp pi/toolcheck.ts ~/.pi/agent/extensions/
 
 On each tool call the extension runs `toolcheck check --pi` with the call's input, the session id, and the current context length. Error-severity rules block the call; warnings and reminders are appended to the tool result as model-visible text. If `toolcheck` is missing, times out, or misbehaves, the extension allows the call and notifies once per session.
 
+Calls a tool makes through `ctx.executeTool()`, such as those a `codemode` script issues, are checked the same way. They have no tool result of their own, so their hints are appended to the parent call's result, along with the reason for each blocked nested call, since a script can catch the error and hide it from the model. Each nested call spawns `toolcheck` once (about 80 ms).
+
 ### Envelope contract
 
 Input (stdin): `{"tool_name": "read", "tool_input": {…}, "session_id": "…", "context_length": 12345}` — `session_id` and `context_length` optional; `context_length` must be an integer when present. Output (stdout, always exit 0):
