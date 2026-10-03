@@ -238,6 +238,26 @@ not = { cross_call = { kind = "duplicate_field_within_session", field = "file_pa
     assert "entire match" in err
 
 
+def test_lint_rules_reports_every_calls_on_cross_call(
+    rules_env: RulesEnv, capsys: pytest.CaptureFixture[str]
+):
+    rules_env(b"""
+[[rule]]
+name = "throttled-cross-call"
+tool = "Read"
+message = "m"
+severity = "reminder"
+every_calls = 10
+
+[rule.match]
+cross_call = { kind = "duplicate_field_within_session", field = "file_path" }
+""")
+    assert _run(["lint-rules"]) == 1
+    err = capsys.readouterr().err
+    assert "throttled-cross-call" in err
+    assert "every_calls is ignored" in err
+
+
 def test_lint_rules_reports_duplicate_names(
     rules_env: RulesEnv, capsys: pytest.CaptureFixture[str]
 ):

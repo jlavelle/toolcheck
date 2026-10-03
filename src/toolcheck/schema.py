@@ -114,6 +114,9 @@ class Rule:
         str | None
     )  # field shown as the sample line in hint output; None: no sample
     match: Predicate
+    every_calls: int | None = (
+        None  # throttle: at most once per N session tool calls; supersedes dedup
+    )
     enabled: bool = True  # False: rule is skipped entirely
 
 
@@ -278,6 +281,14 @@ def _parse_rule(d: dict[str, object]) -> Rule:
     else:
         raise ValueError(f"enabled must be a boolean, got {type(enabled_raw).__name__}")
 
+    every_raw = d.get("every_calls")
+    if every_raw is None:
+        every_calls = None
+    else:
+        every_calls = _integer(every_raw, "every_calls")
+        if every_calls < 1:
+            raise ValueError(f"every_calls must be >= 1, got {every_calls}")
+
     return Rule(
         name=_string(d["name"], "name"),
         tool=tool,
@@ -285,6 +296,7 @@ def _parse_rule(d: dict[str, object]) -> Rule:
         severity=severity,
         enabled=enabled,
         dedup=dedup,
+        every_calls=every_calls,
         sample_field=sample_field,
         match=parse_predicate(d["match"]),
     )

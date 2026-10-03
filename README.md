@@ -22,7 +22,7 @@ After installing on your PATH, add to Claude Code's `settings.json`:
 }
 ```
 
-With `--claude`, each `(session, rule)` pair fires at most once per session when `dedup = true` (the default for warnings and reminders). Error-severity rules default to `dedup = false` so they block every occurrence. Set `TOOLCHECK_NO_DEDUP=1` to disable dedup globally, which can be useful while you're developing rules.
+With `--claude`, each `(session, rule)` pair fires at most once per session when `dedup = true` (the default for warnings and reminders). Error-severity rules default to `dedup = false` so they block every occurrence. A rule with `every_calls = N` instead fires at most once per N tool calls, repeating, and ignores `dedup`. Set `TOOLCHECK_NO_DEDUP=1` to disable dedup and throttling globally, which can be useful while you're developing rules.
 
 ## pi support
 
@@ -84,7 +84,7 @@ echo '{"tool_name":"Bash","tool_input":{"command":"rg foo | wc -l"}}' | toolchec
 
 Exit codes: 0 — no rules fired; 1 — at least one rule fired; 2 — usage error. The `--claude` hook path always exits 0 and reports through the hook envelope instead.
 
-Cross-call rules fire every recurrence (not subject to dedup) and need session state; only `toolcheck check --claude` and `toolcheck check --pi` evaluate them.
+Cross-call rules fire every recurrence (not subject to dedup or every_calls) and need session state; only `toolcheck check --claude` and `toolcheck check --pi` evaluate them.
 
 ## Rules
 
@@ -121,10 +121,13 @@ tool     = "Bash"          # Must match the name of the tool the model calls
 message  = "`rg ... | wc -l` — use `rg -c` (or `--count-matches`)"
 severity = "warning"       # "warning" | "error" | "reminder"
 dedup    = true            # optional: fire once per (session, rule), default true for warnings and reminders, false for errors
+every_calls = 10           # optional: fire at most once per N session tool calls; supersedes dedup
 enabled  = true            # optional: set false to disable without removing, default true
 [rule.match]
 regex = { field = "command", pattern = '\brg\b[^|]*\|\s*wc\s+-l\b' }
 ```
+
+An optional `every_calls` throttles a repeating reminder to at most one delivery per N tool calls in the session, measured against a counter of every tool call the hook observes. A rule with `every_calls` fires on the first match, then not again until N further calls have elapsed, and ignores `dedup`. It needs session-scoped state, so it throttles only under `--claude` and `--pi`; plain `check` (no session) fires every match. Like dedup, `TOOLCHECK_NO_DEDUP=1` disables it.
 
 An optional `sample_field` names the tool-input field echoed as the `> sample` second line of the hint (derived `@`-fields work too). It defaults per tool — Bash: `command`; Read/Edit/Write: `file_path`; Grep/Glob: `pattern`; Agent: `description` — and to no sample line for other tools. `reminder` is non-blocking like `warning` but frames the note as context rather than a problem — that framing lives in the `message` text, not in any prefix toolcheck adds.
 
@@ -212,4 +215,4 @@ cross_call = { kind = "duplicate_field_within_session", field = "file_path" }
 - `duplicate_field_within_session` — the field value was already seen in this session.
 - `adjacent_near_identical` — the field value nearly matches the previous call.
 
-Cross-call rules fire every recurrence (not subject to dedup) and need session state; only `toolcheck check --claude` and `toolcheck check --pi` evaluate them.
+Cross-call rules fire every recurrence (not subject to dedup or every_calls) and need session state; only `toolcheck check --claude` and `toolcheck check --pi` evaluate them.

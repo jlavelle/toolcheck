@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from hypothesis import given
+from hypothesis import strategies as st
+
 from strategies import make_rule
 from toolcheck.cli import evaluate_call, render
 from toolcheck.schema import CrossCallPredicate, RegexPredicate, Rule
@@ -87,6 +90,59 @@ def test_no_rules_for_unknown_tool():
     assert state == SessionState()
 
 
+def _every_calls_rule(every_calls: int) -> Rule:
+    return make_rule(
+        RegexPredicate(field="command", pattern=r"x"),
+        name="nudge",
+        every_calls=every_calls,
+    )
+
+
+def _drive_calls(rule: Rule, n_calls: int) -> list[int]:
+    """Simulate ``n_calls`` matching calls, returning the 1-based calls that fired."""
+    state = SessionState()
+    fires: list[int] = []
+    for call in range(1, n_calls + 1):
+        state = state.with_call()
+        fired, state = evaluate_call(
+            "Bash",
+            {"command": "x"},
+            state,
+            True,
+            "t",
+            [rule],
+            call_index=call,
+        )
+        if fired:
+            fires.append(call)
+    return fires
+
+
+def test_every_calls_fires_then_waits_the_interval():
+    assert _drive_calls(_every_calls_rule(10), 22) == [1, 11, 21]
+
+
+def test_every_calls_of_one_fires_every_call():
+    assert _drive_calls(_every_calls_rule(1), 4) == [1, 2, 3, 4]
+
+
+def test_every_calls_ignores_dedup():
+    rule = make_rule(
+        RegexPredicate(field="command", pattern=r"x"),
+        name="nudge",
+        dedup=True,
+        every_calls=5,
+    )
+    assert _drive_calls(rule, 11) == [1, 6, 11]
+
+
+def test_every_calls_fires_when_no_call_index_is_known():
+    rule = _every_calls_rule(10)
+    inp = {"command": "x"}
+    fired, _ = evaluate_call("Bash", inp, SessionState(), True, "t", [rule])
+    assert "nudge" in _names(fired)
+
+
 def _render_rule() -> Rule:
     return make_rule(RegexPredicate(field="command", pattern=r"\|"), name="r")
 
@@ -106,3 +162,13 @@ def test_render_derived_sample_field():
         sample_field="@last_pipe_command",
     )
     assert render(rule, {"command": "rg foo | head"}) == "[r] m\n> head"
+
+
+@given(
+    st.integers(min_value=1, max_value=12),
+    st.integers(min_value=1, max_value=60),
+)
+def test_every_calls_spacing(interval: int, n_calls: int):
+    assert _drive_calls(_every_calls_rule(interval), n_calls) == list(
+        range(1, n_calls + 1, interval)
+    )

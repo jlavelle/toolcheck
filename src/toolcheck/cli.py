@@ -112,6 +112,7 @@ def evaluate_call(
     now: str,
     rules: list[Rule],
     context_length: int | None = None,
+    call_index: int | None = None,
 ) -> tuple[list[Rule], SessionState]:
     """Evaluate every rule for the tool against the input and prior state.
 
@@ -119,6 +120,8 @@ def evaluate_call(
     stateless rules, plus recorded observations for cross-call fields). Pure:
     no I/O, deterministic given its arguments. ``context_length`` is the
     current session context length in tokens, or None when unknown.
+    ``call_index`` is the session's 1-based tool-call count; rules with
+    ``every_calls`` need it to throttle, and fire unrestricted when it is None.
     """
     rules = [r for r in rules if r.tool == tool_name]
     env = Env(tool_input, context_length)
@@ -137,12 +140,24 @@ def evaluate_call(
 
         if not is_stateless(rule):
             continue  # nested cross-call: unsupported, skip defensively
-        if use_dedup and rule.dedup and next_state.has_fired(rule.name):
-            continue
+        if use_dedup:
+            if rule.every_calls is not None:
+                last = next_state.last_fired_call(rule.name)
+                if (
+                    last is not None
+                    and call_index is not None
+                    and call_index - last < rule.every_calls
+                ):
+                    continue
+            elif rule.dedup and next_state.has_fired(rule.name):
+                continue
         if _eval_stateless(rule, env):
             fired.append(rule)
-            if use_dedup and rule.dedup:
-                next_state = next_state.with_fired(rule.name, now)
+            if use_dedup:
+                if rule.every_calls is not None and call_index is not None:
+                    next_state = next_state.with_fired_call(rule.name, call_index)
+                elif rule.dedup:
+                    next_state = next_state.with_fired(rule.name, now)
 
     observed: set[tuple[str, str]] = set()  # two rules on one field: record once
     for rule in rules:
@@ -186,6 +201,7 @@ def _rule_dict(r: Rule) -> dict[str, object]:
         "severity": r.severity,
         "enabled": r.enabled,
         "stateless": is_stateless(r),
+        "every_calls": r.every_calls,
         "message": r.message,
     }
 
@@ -278,8 +294,17 @@ def _run_hook(
     state = load_state(path) if path is not None else SessionState()
 
     now = datetime.now(timezone.utc).isoformat()
+    call_index = state.calls + 1 if path is not None else None
+    state = state.with_call() if path is not None else state
     fired, next_state = evaluate_call(
-        tool, tool_input, state, use_dedup, now, load_catalogue(), context_length
+        tool,
+        tool_input,
+        state,
+        use_dedup,
+        now,
+        load_catalogue(),
+        context_length,
+        call_index,
     )
 
     notices: list[str] = []
@@ -369,6 +394,10 @@ def lint_rule(rule: Rule) -> list[str]:
             compile_rule(rule)
         except Exception as e:
             issues.append(f"does not compile: {e}")
+    if cross_call_of(rule) is not None and rule.every_calls is not None:
+        issues.append(
+            "every_calls is ignored on cross_call rules (they fire on every recurrence)"
+        )
     known = known_derived_fields()
     fields = set(predicate_fields(rule.match))
     if rule.sample_field is not None:

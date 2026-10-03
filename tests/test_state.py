@@ -84,3 +84,22 @@ def test_state_path_scopes_by_agent(monkeypatch: pytest.MonkeyPatch):
     assert "claude-code" in claude.parts
     assert "pi" in pi.parts
     assert claude != pi
+
+
+def test_calls_and_fired_call_roundtrip():
+    state = SessionState().with_call().with_call().with_fired_call("r", 2)
+    save_state(_ROUNDTRIP_FILE, state)
+    loaded = load_state(_ROUNDTRIP_FILE)
+    assert loaded.calls == 2
+    assert loaded.last_fired_call("r") == 2
+    assert loaded == state
+
+
+def test_ledger_transforms_preserve_calls_and_fired_call():
+    base = SessionState(calls=7, fired_call={"r": 3})
+    assert base.with_fired("x", "t").calls == 7
+    assert base.with_fired("x", "t").last_fired_call("r") == 3
+    assert base.with_observation("Read", "file_path", "a").calls == 7
+    assert base.with_observation("Read", "file_path", "a").last_fired_call("r") == 3
+    assert base.with_call().calls == 8
+    assert base.with_call().last_fired_call("r") == 3

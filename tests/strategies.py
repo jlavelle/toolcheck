@@ -144,6 +144,7 @@ def make_rule(
     tool: str = "Bash",
     name: str = "t",
     dedup: bool = True,
+    every_calls: int | None = None,
     sample_field: str | None = "command",
 ) -> Rule:
     return Rule(
@@ -152,6 +153,7 @@ def make_rule(
         message="m",
         severity="warning",
         dedup=dedup,
+        every_calls=every_calls,
         sample_field=sample_field,
         match=pred,
     )

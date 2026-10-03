@@ -231,6 +231,50 @@ regex = { field = "command", pattern = 'x' }
     assert rules["reminder-rule"].dedup is True
 
 
+def test_every_calls_parses_and_defaults_none():
+    toml = b"""
+[[rule]]
+name = "throttled"
+tool = "Bash"
+message = "m"
+severity = "reminder"
+every_calls = 10
+
+[rule.match]
+regex = { field = "command", pattern = 'x' }
+
+[[rule]]
+name = "unthrottled"
+tool = "Bash"
+message = "m"
+severity = "reminder"
+
+[rule.match]
+regex = { field = "command", pattern = 'x' }
+"""
+    rules = {r.name: r for r in parse_rules(toml, Path("x.toml")).rules}
+    assert rules["throttled"].every_calls == 10
+    assert rules["unthrottled"].every_calls is None
+
+
+def test_every_calls_rejects_nonpositive():
+    toml = b"""
+[[rule]]
+name = "bad"
+tool = "Bash"
+message = "m"
+severity = "reminder"
+every_calls = 0
+
+[rule.match]
+regex = { field = "command", pattern = 'x' }
+"""
+    catalogue = parse_rules(toml, Path("x.toml"))
+    assert catalogue.rules == ()
+    assert len(catalogue.errors) == 1
+    assert "every_calls" in catalogue.errors[0].message
+
+
 def test_sample_field_defaults_per_tool():
     toml = b"""
 [[rule]]

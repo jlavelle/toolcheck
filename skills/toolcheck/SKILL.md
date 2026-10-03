@@ -8,7 +8,7 @@ description: >
   deny/block rule for a tool call (Bash, Read, Edit, Write, Grep, Glob,
   Agent, `mcp__*`); when a rule fires wrongly, never fires, or needs a
   tighter regex; or on any of `[rule.match]`, `severity`, `sample_field`,
-  `dedup`, `regex`, `present`, `absent`, `equals`, `in`, `length`,
+  `dedup`, `every_calls`, `regex`, `present`, `absent`, `equals`, `in`, `length`,
   `context_length`, `not`, `all`, `any`, `cross_call`,
   `@last_pipe_command`, `toolcheck check`, `toolcheck lint-rules`,
   `toolcheck list`, or `TOOLCHECK_NO_DEDUP`. Out of scope: changing
@@ -48,7 +48,7 @@ severity = "warning"
 regex = { field = "command", pattern = '\brg\b[^|]*\|\s*wc\s+-l\b' }
 ```
 
-Optional keys: `dedup` (default `true` for warning and reminder, `false` for error), `enabled` (default `true`), `sample_field` (defaults to `command` for Bash, `file_path` for Read/Edit/Write, `pattern` for Grep/Glob, `description` for Agent, and nothing for other tools).
+Optional keys: `dedup` (default `true` for warning and reminder, `false` for error), `every_calls` (positive integer: fire at most once per N session tool calls, repeating, and supersede `dedup`), `enabled` (default `true`), `sample_field` (defaults to `command` for Bash, `file_path` for Read/Edit/Write, `pattern` for Grep/Glob, `description` for Agent, and nothing for other tools).
 
 ## Name, severity, message
 
@@ -56,8 +56,10 @@ Optional keys: `dedup` (default `true` for warning and reminder, `false` for err
 
 Pick `severity` by what should happen to the call:
 
-- `warning`: the call runs and the model sees the message once per session. Use for a better command or tool.
+- `warning`: the call runs and the model sees the message once per session by default. Use for a better command or tool.
 - `reminder`: same delivery as `warning`, for context the model should hold rather than a mistake it made. The framing lives in your message text. toolcheck adds no prefix.
+
+A rule you want to repeat rather than show once, such as a standing reminder, sets `every_calls` to a positive integer and fires at most once per that many tool calls in the session. The counter spans every tool call the hook observes, not just the rule's own tool. `every_calls` needs session state, so it throttles under `--claude` and `--pi` but not under plain `check`.
 - `error`: the call is denied and the model sees the message as the reason. It fires on every occurrence. Use for things that must not happen (secrets, `--no-verify`, piping a download into a shell), and make the message name the path the model should take instead, or it will try variants until one slips past.
 
 Messages follow one shape: what was seen, an em-dash, the remedy. Lowercase start, no trailing period, under about 120 characters. The hint renders as `[name] message` with the sample field on a second line, so the message should not repeat the command. Read the live catalogue before writing to keep the voice uniform.
@@ -97,11 +99,11 @@ These hold in the installed `toolcheck` and will not be reported by `lint-rules`
 - `context_length` is unknown under plain `check` and on the first call of a session, and a comparison against unknown is `False`. Under `--claude` it is estimated from the transcript and lags the current turn by about one message.
 - `@last_pipe_command` is the basename of the first token of the rightmost `|` segment, with `VAR=x` prefixes stripped. `||` is not a pipe. It is the only derived field; any other `@name` fails lint.
 - Under pi, `path` is renamed to `file_path` before evaluation. pi's `edit` sends an `edits` list, not a single string, so toolcheck joins the `newText` values into a synthetic `new_string`; a rule on `new_string` fires under both agents. `old_string` is never synthesised, so rules on it never fire under pi. A `cross_call` on `field = "path"` never fires under pi either, and lint does not flag it. Target `file_path`.
-- Dedup makes a warning fire once per session, so a rule you are iterating on in a live session seems to stop working. Set `TOOLCHECK_NO_DEDUP=1` in the hook's environment while developing, or test with plain `check`.
+- Dedup makes a warning fire once per session (and `every_calls` throttles it to an interval), so a rule you are iterating on in a live session seems to stop working. Set `TOOLCHECK_NO_DEDUP=1` in the hook's environment while developing, or test with plain `check`.
 
 ## Cross-call rules
 
-`cross_call` compares the current call's field with earlier calls to the same tool in the same session. `duplicate_field_within_session` fires when the exact value was seen before. `adjacent_near_identical` fires when it is within about 90% similarity of the previous call's value. They fire on every recurrence and ignore `dedup`.
+`cross_call` compares the current call's field with earlier calls to the same tool in the same session. `duplicate_field_within_session` fires when the exact value was seen before. `adjacent_near_identical` fires when it is within about 90% similarity of the previous call's value. They fire on every recurrence and ignore `dedup` and `every_calls`.
 
 Plain `check` skips them. Test with the hook envelope and a session id, twice:
 
