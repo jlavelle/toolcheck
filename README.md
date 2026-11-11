@@ -8,6 +8,24 @@ A linter for LLM tool calls. Run `toolcheck check` against tool call JSON on std
 uv tool install .
 ```
 
+With Nix, run it from the flake or add `packages.<system>.toolcheck` to your profile or home-manager config:
+
+```sh
+nix run github:jlavelle/toolcheck -- check --claude
+```
+
+## Development
+
+`nix develop` gives a shell with Python, uv, just, ruff, bun and Node. In it, run the tests and checks:
+
+```sh
+uv run pytest
+just check
+bun test pi/toolcheck.test.ts
+```
+
+`nix build` builds the package and runs the tests, except the two hook tests, which run the CLI through `uv run` and need the network.
+
 ## Claude Code hook configuration
 
 After installing on your PATH, add to Claude Code's `settings.json`:

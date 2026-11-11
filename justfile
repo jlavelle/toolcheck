@@ -10,4 +10,4 @@ pyright:
     uv run pyright
 
 ruff:
-    uv run ruff check
+    ruff check
