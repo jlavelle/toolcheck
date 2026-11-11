@@ -15,7 +15,8 @@ is the best-effort I/O edge and never raises.
 from __future__ import annotations
 
 import json
-from typing import Iterable, Mapping, cast
+from collections.abc import Iterable, Mapping
+from typing import cast
 
 # Summed for "fullest occupancy": input plus both cache tiers, plus the output
 # that becomes part of the context on the next turn.

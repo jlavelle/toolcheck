@@ -17,8 +17,8 @@ from __future__ import annotations
 import json
 import operator
 import re
+from collections.abc import Callable, Mapping, Sized
 from dataclasses import dataclass
-from typing import Callable, Mapping, Sized
 
 from toolcheck import bash as _bash
 from toolcheck.schema import (

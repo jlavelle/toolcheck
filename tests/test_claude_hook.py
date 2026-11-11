@@ -23,6 +23,7 @@ def _run_hook(rules_toml: bytes, payload: dict[str, object]) -> dict[str, object
         ["uv", "run", "--project", project, "toolcheck", "check", "--claude"],
         input=json.dumps(payload),
         capture_output=True,
+        check=False,
         text=True,
         env=env,
     )

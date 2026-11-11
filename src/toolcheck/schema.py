@@ -19,9 +19,10 @@ from __future__ import annotations
 import functools
 import os
 import tomllib
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Literal, Sequence, Union, cast
+from typing import Literal, cast
 
 
 @dataclass(frozen=True)
@@ -44,17 +45,17 @@ class InPredicate:
 
 @dataclass(frozen=True)
 class NotPredicate:
-    operand: "Predicate"
+    operand: Predicate
 
 
 @dataclass(frozen=True)
 class AllPredicate:
-    operands: tuple["Predicate", ...]
+    operands: tuple[Predicate, ...]
 
 
 @dataclass(frozen=True)
 class AnyPredicate:
-    operands: tuple["Predicate", ...]
+    operands: tuple[Predicate, ...]
 
 
 @dataclass(frozen=True)
@@ -90,17 +91,17 @@ class CrossCallPredicate:
     field: str  # which tool_input field to track across calls
 
 
-Predicate = Union[
-    RegexPredicate,
-    PresencePredicate,
-    InPredicate,
-    LengthPredicate,
-    ContextLengthPredicate,
-    NotPredicate,
-    AllPredicate,
-    AnyPredicate,
-    CrossCallPredicate,
-]
+Predicate = (
+    RegexPredicate
+    | PresencePredicate
+    | InPredicate
+    | LengthPredicate
+    | ContextLengthPredicate
+    | NotPredicate
+    | AllPredicate
+    | AnyPredicate
+    | CrossCallPredicate
+)
 
 
 @dataclass(frozen=True)
@@ -155,26 +156,26 @@ _PREDICATE_KEYS: frozenset[str] = frozenset(
 
 def _mapping(x: object, ctx: str) -> dict[str, object]:
     if not isinstance(x, dict):
-        raise ValueError(f"{ctx} must be a mapping, got {type(x).__name__}")
+        raise TypeError(f"{ctx} must be a mapping, got {type(x).__name__}")
     return cast("dict[str, object]", x)
 
 
 def _seq(x: object, ctx: str) -> list[object]:
     if not isinstance(x, list):
-        raise ValueError(f"{ctx} must be a list, got {type(x).__name__}")
+        raise TypeError(f"{ctx} must be a list, got {type(x).__name__}")
     return cast("list[object]", x)
 
 
 def _string(x: object, ctx: str) -> str:
     if not isinstance(x, str):
-        raise ValueError(f"{ctx} must be a string, got {type(x).__name__}")
+        raise TypeError(f"{ctx} must be a string, got {type(x).__name__}")
     return x
 
 
 def _integer(x: object, ctx: str) -> int:
     # bool is an int subclass; reject explicitly.
     if isinstance(x, bool) or not isinstance(x, int):
-        raise ValueError(f"{ctx} must be an integer, got {type(x).__name__}")
+        raise TypeError(f"{ctx} must be an integer, got {type(x).__name__}")
     return x
 
 
@@ -334,14 +335,14 @@ def parse_rules(data: bytes, path: Path) -> Catalogue:
     try:
         parsed = tomllib.loads(data.decode("utf-8"))
         raws = _seq(parsed.get("rule", []), "rule")
-    except (ValueError, KeyError) as e:
+    except (ValueError, TypeError, KeyError) as e:
         return Catalogue((), (LoadError(path, _problem(e)),))
     rules: list[Rule] = []
     errors: list[LoadError] = []
     for i, raw in enumerate(raws):
         try:
             rules.append(_parse_rule(_mapping(raw, "rule")))
-        except (ValueError, KeyError) as e:
+        except (ValueError, TypeError, KeyError) as e:
             errors.append(LoadError(path, f"{_rule_label(i, raw)}: {_problem(e)}"))
     return Catalogue(tuple(rules), tuple(errors))
 

@@ -31,7 +31,7 @@ class SessionState:
     def has_fired(self, rule_name: str) -> bool:
         return rule_name in self.fired
 
-    def with_fired(self, rule_name: str, timestamp: str) -> "SessionState":
+    def with_fired(self, rule_name: str, timestamp: str) -> SessionState:
         return SessionState(
             fired={**self.fired, rule_name: timestamp},
             seen=self.seen,
@@ -39,7 +39,7 @@ class SessionState:
             fired_call=self.fired_call,
         )
 
-    def with_call(self) -> "SessionState":
+    def with_call(self) -> SessionState:
         return SessionState(
             fired=self.fired,
             seen=self.seen,
@@ -50,7 +50,7 @@ class SessionState:
     def last_fired_call(self, rule_name: str) -> int | None:
         return self.fired_call.get(rule_name)
 
-    def with_fired_call(self, rule_name: str, call: int) -> "SessionState":
+    def with_fired_call(self, rule_name: str, call: int) -> SessionState:
         return SessionState(
             fired=self.fired,
             seen=self.seen,
@@ -61,9 +61,7 @@ class SessionState:
     def history(self, tool: str, field_name: str) -> tuple[str, ...]:
         return self.seen.get(_seen_key(tool, field_name), ())
 
-    def with_observation(
-        self, tool: str, field_name: str, value: str
-    ) -> "SessionState":
+    def with_observation(self, tool: str, field_name: str, value: str) -> SessionState:
         key = _seen_key(tool, field_name)
         prior = self.seen.get(key, ())
         return SessionState(
@@ -104,7 +102,11 @@ def load_state(path: Path) -> SessionState:
     fired = {k: v for k, v in fired_raw.items() if isinstance(v, str)}
 
     calls_raw = d.get("calls")
-    calls = calls_raw if isinstance(calls_raw, int) and not isinstance(calls_raw, bool) else 0
+    calls = (
+        calls_raw
+        if isinstance(calls_raw, int) and not isinstance(calls_raw, bool)
+        else 0
+    )
     calls = max(calls, 0)
 
     fired_call_raw = _as_dict(d.get("fired_call")) or {}

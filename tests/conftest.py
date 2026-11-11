@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Callable, Iterator
 
 import pytest
 

@@ -10,7 +10,7 @@ Fire per-occurrence; exempt from the per-rule dedup setting.
 from __future__ import annotations
 
 import difflib
-from typing import Mapping
+from collections.abc import Mapping
 
 from toolcheck.compile import field_text
 from toolcheck.schema import CrossCallPredicate

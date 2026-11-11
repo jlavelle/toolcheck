@@ -105,9 +105,7 @@ def test_mapping_is_rename_or_identity(tool: str, tool_input: dict[str, int]):
             assert "path" not in mapped
         else:
             assert mapped[field] == value
-    expected = {
-        "file_path" if path_tool and k == "path" else k for k in tool_input
-    }
+    expected = {"file_path" if path_tool and k == "path" else k for k in tool_input}
     assert set(mapped) == expected
 
 

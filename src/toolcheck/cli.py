@@ -35,10 +35,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from collections import Counter
-from datetime import datetime, timezone
-from typing import Callable, Mapping, Sequence, cast
+from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
+from typing import cast
 
 from toolcheck.compile import (
     Env,
@@ -93,14 +95,14 @@ def _sample(rule: Rule, tool_input: Mapping[str, object]) -> str:
 
 
 def _eval_stateless(rule: Rule, env: Env) -> bool:
-    """Compile and run a single stateless rule; False on any exception."""
+    """Compile and run a single stateless rule; False when it cannot compile or resolve a field."""
     try:
         matcher = compile_rule(rule)
-    except Exception:
+    except (re.error, NotImplementedError):
         return False
     try:
         return matcher(env)
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 
@@ -131,11 +133,8 @@ def evaluate_call(
     for rule in rules:
         cc = cross_call_of(rule)
         if cc is not None:
-            try:
-                if eval_cross_call(cc, tool_name, tool_input, state):
-                    fired.append(rule)
-            except Exception:
-                pass
+            if eval_cross_call(cc, tool_name, tool_input, state):
+                fired.append(rule)
             continue
 
         if not is_stateless(rule):
@@ -210,7 +209,7 @@ def _read_input(args: argparse.Namespace) -> dict[str, object]:
     raw = sys.stdin.read() if args.file is None else _read_file(cast("str", args.file))
     data = cast("object", json.loads(raw))
     if not isinstance(data, dict):
-        raise ValueError("input must be a JSON object")
+        raise TypeError("input must be a JSON object")
     return cast("dict[str, object]", data)
 
 
@@ -222,7 +221,7 @@ def _read_file(path: str) -> str:
 def _cmd_check(args: argparse.Namespace) -> int:
     try:
         payload = _read_input(args)
-    except (ValueError, OSError) as e:
+    except (ValueError, TypeError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
@@ -293,7 +292,7 @@ def _run_hook(
     path = state_path(session_id, agent) if has_session else None  # type: ignore[arg-type]
     state = load_state(path) if path is not None else SessionState()
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     call_index = state.calls + 1 if path is not None else None
     state = state.with_call() if path is not None else state
     fired, next_state = evaluate_call(
@@ -392,7 +391,7 @@ def lint_rule(rule: Rule) -> list[str]:
     elif is_stateless(rule):
         try:
             compile_rule(rule)
-        except Exception as e:
+        except re.error as e:
             issues.append(f"does not compile: {e}")
     if cross_call_of(rule) is not None and rule.every_calls is not None:
         issues.append(

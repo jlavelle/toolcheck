@@ -49,7 +49,9 @@ def _joined_new_text(edits: object) -> str | None:
     return "\n".join(parts) if parts else None
 
 
-def normalise(tool_name: str, tool_input: Mapping[str, object]) -> tuple[str, dict[str, object]]:
+def normalise(
+    tool_name: str, tool_input: Mapping[str, object]
+) -> tuple[str, dict[str, object]]:
     """Map a pi tool call to canonical names; unmapped keys pass through."""
     canonical = TOOL_NAMES.get(tool_name, tool_name)
     mapped = {

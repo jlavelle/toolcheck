@@ -28,6 +28,7 @@ def _run_hook(
         ["uv", "run", "--project", project, "toolcheck", "check", "--pi"],
         input=json.dumps(payload),
         capture_output=True,
+        check=False,
         text=True,
         env=env,
     )
@@ -200,7 +201,10 @@ regex = { field = "new_string", pattern = '-- note' }
         new_string_toml,
         {
             "tool_name": "edit",
-            "tool_input": {"path": "/x.hs", "edits": [{"oldText": "a", "newText": "x = 1"}]},
+            "tool_input": {
+                "path": "/x.hs",
+                "edits": [{"oldText": "a", "newText": "x = 1"}],
+            },
         },
     )
     assert clean["warnings"] == []
@@ -230,6 +234,7 @@ context_length = { op = ">", value = 0 }
         ["uv", "run", "--project", project, "toolcheck", "check", "--pi"],
         input=json.dumps(payload),
         capture_output=True,
+        check=False,
         text=True,
         env=env,
     )
