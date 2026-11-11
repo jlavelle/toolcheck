@@ -48,7 +48,7 @@ severity = "warning"
 regex = { field = "command", pattern = '\brg\b[^|]*\|\s*wc\s+-l\b' }
 ```
 
-Optional keys: `dedup` (default `true` for warning and reminder, `false` for error), `every_calls` (positive integer: fire at most once per N session tool calls, repeating, and supersede `dedup`), `enabled` (default `true`), `sample_field` (defaults to `command` for Bash, `file_path` for Read/Edit/Write, `pattern` for Grep/Glob, `description` for Agent, and nothing for other tools).
+Optional keys: `message_file` (in place of `message`: a text file holding the message, relative to the rule's TOML file unless absolute), `dedup` (default `true` for warning and reminder, `false` for error), `every_calls` (positive integer: fire at most once per N session tool calls, repeating, and supersede `dedup`), `enabled` (default `true`), `sample_field` (defaults to `command` for Bash, `file_path` for Read/Edit/Write, `pattern` for Grep/Glob, `description` for Agent, and nothing for other tools).
 
 ## Name, severity, message
 
@@ -56,7 +56,7 @@ Optional keys: `dedup` (default `true` for warning and reminder, `false` for err
 
 Pick `severity` by what should happen to the call:
 
-- `warning`: the call runs and the model sees the message once per session by default. Use for a better command or tool.
+- `warning`: the call runs and the model sees the message once per agent by default: once in the main session and once in each subagent. Under Claude Code the message arrives after the call has run, so a hint about the call itself belongs in an `error` rule with `dedup = true`, which refuses the first such call. Use for a better command or tool.
 - `reminder`: same delivery as `warning`, for context the model should hold rather than a mistake it made. The framing lives in your message text. toolcheck adds no prefix.
 
 A rule you want to repeat rather than show once, such as a standing reminder, sets `every_calls` to a positive integer and fires at most once per that many tool calls in the session. The counter spans every tool call the hook observes, not just the rule's own tool. `every_calls` needs session state, so it throttles under `--claude` and `--pi` but not under plain `check`.
@@ -113,6 +113,6 @@ for i in 1 2; do
 done
 ```
 
-The second run has `additionalContext`. State lives under `~/.local/state/claude-code/toolcheck/<session_id>.json` (`~/.local/state/pi/toolcheck/` for pi). Delete the file to reset.
+The second run has `additionalContext`. State lives under `~/.local/state/claude-code/toolcheck/<session_id>.json`, with `<session_id>.agents/<agent_id>.json` for each subagent (`~/.local/state/pi/toolcheck/` for pi). Delete a file to reset that agent, or pipe a hook payload to `toolcheck reset`, which keeps cross-call history and, without an `agent_id`, resets every agent of the session.
 
 The README in the toolcheck repository documents the full format, the pi vocabulary mapping, and the hook envelopes.

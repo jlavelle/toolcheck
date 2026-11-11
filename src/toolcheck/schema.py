@@ -108,7 +108,7 @@ Predicate = (
 class Rule:
     name: str
     tool: str  # "Bash", "Read", "Edit", "Grep", "mcp__*", …
-    message: str  # one-line combined diagnosis + remedy
+    message: str  # diagnosis + remedy, from `message` or the file `message_file` names
     severity: Literal["warning", "error", "reminder"]
     dedup: bool  # True: fire at most once per (session, rule); False: fire every match
     sample_field: (
@@ -262,7 +262,7 @@ def parse_predicate(d: object) -> Predicate:
     )
 
 
-def _parse_rule(d: dict[str, object]) -> Rule:
+def _parse_rule(d: dict[str, object], rules_dir: Path) -> Rule:
     tool = _string(d["tool"], "tool")
     severity = _severity(d.get("severity"))
     sample_raw = d.get("sample_field", _DEFAULT_SAMPLE.get(tool))
@@ -293,7 +293,7 @@ def _parse_rule(d: dict[str, object]) -> Rule:
     return Rule(
         name=_string(d["name"], "name"),
         tool=tool,
-        message=_string(d["message"], "message"),
+        message=_message(d, rules_dir),
         severity=severity,
         enabled=enabled,
         dedup=dedup,
@@ -301,6 +301,23 @@ def _parse_rule(d: dict[str, object]) -> Rule:
         sample_field=sample_field,
         match=parse_predicate(d["match"]),
     )
+
+
+def _message(d: dict[str, object], rules_dir: Path) -> str:
+    """The rule's message, read from `message_file` relative to the rule's file when set."""
+    if "message_file" not in d:
+        return _string(d["message"], "message")
+    if "message" in d:
+        raise ValueError("set message or message_file, not both")
+    path = Path(_string(d["message_file"], "message_file")).expanduser()
+    if not path.is_absolute():
+        path = rules_dir / path
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError as e:
+        raise ValueError(f"message_file {str(path)!r}: {e.strerror}") from e
+    except UnicodeDecodeError as e:
+        raise ValueError(f"message_file {str(path)!r} is not UTF-8") from e
 
 
 @dataclass(frozen=True)
@@ -341,7 +358,7 @@ def parse_rules(data: bytes, path: Path) -> Catalogue:
     errors: list[LoadError] = []
     for i, raw in enumerate(raws):
         try:
-            rules.append(_parse_rule(_mapping(raw, "rule")))
+            rules.append(_parse_rule(_mapping(raw, "rule"), path.parent))
         except (ValueError, TypeError, KeyError) as e:
             errors.append(LoadError(path, f"{_rule_label(i, raw)}: {_problem(e)}"))
     return Catalogue(tuple(rules), tuple(errors))

@@ -35,12 +35,19 @@ After installing on your PATH, add to Claude Code's `settings.json`:
   "hooks": {
     "PreToolUse": [
       { "hooks": [ { "type": "command", "command": "toolcheck check --claude" } ] }
+    ],
+    "SessionStart": [
+      { "matcher": "compact", "hooks": [ { "type": "command", "command": "toolcheck reset --claude" } ] }
     ]
   }
 }
 ```
 
-With `--claude`, each `(session, rule)` pair fires at most once per session when `dedup = true` (the default for warnings and reminders). Error-severity rules default to `dedup = false` so they block every occurrence. A rule with `every_calls = N` instead fires at most once per N tool calls, repeating, and ignores `dedup`. Set `TOOLCHECK_NO_DEDUP=1` to disable dedup and throttling globally, which can be useful while you're developing rules.
+With `--claude`, each rule fires at most once per agent when `dedup = true` (the default for warnings and reminders). The main session and each subagent, which Claude Code names by the payload's `agent_id`, keep separate state, because a subagent starts from its own context and has not seen the hints its parent got.
+
+Claude Code adds a hint after the call that triggered it has run. A hint about that call itself, such as how to write a commit message, needs `severity = "error"` with `dedup = true`, which refuses the first matching call so the model reads the hint and retries.
+
+A compaction drops the hints the model was given. `toolcheck reset --claude` reads the `SessionStart` payload and lets every rule fire again, keeping cross-call history. Claude Code 2.1.316 sends the same `SessionStart`, `PreCompact` and `PostCompact` payloads, with no `agent_id`, whether the main session or a subagent compacted, so a reset without an `agent_id` clears the main agent and every subagent of the session. An agent that did not compact sees its hints once more. Error-severity rules default to `dedup = false` so they block every occurrence. A rule with `every_calls = N` instead fires at most once per N tool calls, repeating, and ignores `dedup`. Set `TOOLCHECK_NO_DEDUP=1` to disable dedup and throttling globally, which can be useful while you're developing rules.
 
 ## pi support
 
@@ -146,6 +153,8 @@ regex = { field = "command", pattern = '\brg\b[^|]*\|\s*wc\s+-l\b' }
 ```
 
 An optional `every_calls` throttles a repeating reminder to at most one delivery per N tool calls in the session, measured against a counter of every tool call the hook observes. A rule with `every_calls` fires on the first match, then not again until N further calls have elapsed, and ignores `dedup`. It needs session-scoped state, so it throttles only under `--claude` and `--pi`; plain `check` (no session) fires every match. Like dedup, `TOOLCHECK_NO_DEDUP=1` disables it.
+
+`message_file` can replace `message` with a path to a text file whose contents are the message, resolved relative to the rule's TOML file when it is not absolute. It suits a longer hint, such as a document the model should read before using a tool. A missing file makes the rule a load error.
 
 An optional `sample_field` names the tool-input field echoed as the `> sample` second line of the hint (derived `@`-fields work too). It defaults per tool — Bash: `command`; Read/Edit/Write: `file_path`; Grep/Glob: `pattern`; Agent: `description` — and to no sample line for other tools. `reminder` is non-blocking like `warning` but frames the note as context rather than a problem — that framing lives in the `message` text, not in any prefix toolcheck adds.
 

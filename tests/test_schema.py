@@ -401,3 +401,69 @@ def test_catalogue_survives_a_broken_sibling_file(rules_env: RulesEnv):
     assert [r.name for r in load_catalogue()] == ["read-already-read"]
     errors = load_errors()
     assert [e.path for e in errors] == [d / "zz-broken.toml"]
+
+
+def _message_file_rule(message_keys: str) -> bytes:
+    return f"""
+[[rule]]
+name = "from-file"
+tool = "Bash"
+{message_keys}
+[rule.match]
+present = "command"
+""".encode()
+
+
+def test_message_file_resolves_beside_the_rules_file(tmp_path: Path):
+    (tmp_path / "hints").mkdir()
+    (tmp_path / "hints" / "git.txt").write_text(
+        "Commit on a branch.\n\nNever on main.\n"
+    )
+    cat = parse_rules(
+        _message_file_rule('message_file = "hints/git.txt"'), tmp_path / "x.toml"
+    )
+    assert cat.errors == ()
+    assert cat.rules[0].message == "Commit on a branch.\n\nNever on main."
+
+
+def test_message_file_takes_an_absolute_path(tmp_path: Path):
+    hint = tmp_path / "hint.txt"
+    hint.write_text("absolute\n")
+    cat = parse_rules(
+        _message_file_rule(f"message_file = {str(hint)!r}"), Path("elsewhere/x.toml")
+    )
+    assert cat.rules[0].message == "absolute"
+
+
+def test_message_and_message_file_together_is_an_error(tmp_path: Path):
+    (tmp_path / "hint.txt").write_text("x")
+    cat = parse_rules(
+        _message_file_rule('message = "m"\nmessage_file = "hint.txt"'),
+        tmp_path / "x.toml",
+    )
+    assert cat.rules == ()
+    assert "not both" in cat.errors[0].message
+
+
+def test_missing_message_file_is_a_load_error(tmp_path: Path):
+    cat = parse_rules(
+        _message_file_rule('message_file = "absent.txt"'), tmp_path / "x.toml"
+    )
+    assert cat.rules == ()
+    assert "absent.txt" in cat.errors[0].message
+
+
+def test_message_file_that_is_not_utf8_is_a_load_error(tmp_path: Path):
+    (tmp_path / "hint.txt").write_bytes(b"\xff\xfe\x00")
+    cat = parse_rules(
+        _message_file_rule('message_file = "hint.txt"'), tmp_path / "x.toml"
+    )
+    assert cat.rules == ()
+    assert "not UTF-8" in cat.errors[0].message
+
+
+def test_message_file_that_is_a_directory_is_a_load_error(tmp_path: Path):
+    (tmp_path / "hints").mkdir()
+    cat = parse_rules(_message_file_rule('message_file = "hints"'), tmp_path / "x.toml")
+    assert cat.rules == ()
+    assert "hints" in cat.errors[0].message

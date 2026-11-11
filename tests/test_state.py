@@ -10,6 +10,13 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from strategies import NONEMPTY_TEXT, SAFE_TEXT
+
+# Ids as Claude Code makes them: no path separators or dots, which state_path rewrites.
+SAFE_ID = st.text(
+    alphabet=st.characters(categories=["L", "N"], include_characters="-_"),
+    min_size=1,
+    max_size=12,
+)
 from toolcheck.state import SessionState, load_state, save_state, state_path
 
 _ROUNDTRIP_FILE = Path(tempfile.mkdtemp(prefix="toolcheck-state-")) / "s.json"
@@ -103,3 +110,49 @@ def test_ledger_transforms_preserve_calls_and_fired_call():
     assert base.with_observation("Read", "file_path", "a").last_fired_call("r") == 3
     assert base.with_call().calls == 8
     assert base.with_call().last_fired_call("r") == 3
+
+
+def test_state_path_gives_each_subagent_its_own_file(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("XDG_STATE_HOME", "/tmp/xdg")
+    main = state_path("session", "claude-code")
+    first = state_path("session", "claude-code", "agent-1")
+    second = state_path("session", "claude-code", "agent-2")
+    assert len({main, first, second}) == 3
+
+
+@given(SAFE_ID, SAFE_ID, st.one_of(st.none(), SAFE_ID), st.one_of(st.none(), SAFE_ID))
+def test_state_path_never_shares_a_file(
+    session_a: str, session_b: str, agent_a: str | None, agent_b: str | None
+):
+    a = state_path(session_a, "claude-code", agent_a)
+    b = state_path(session_b, "claude-code", agent_b)
+    assert (a == b) == ((session_a, agent_a) == (session_b, agent_b))
+
+
+def test_empty_agent_id_is_the_main_agent(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("XDG_STATE_HOME", "/tmp/xdg")
+    assert state_path("session", "claude-code", "") == state_path(
+        "session", "claude-code"
+    )
+
+
+def test_state_path_sanitises_agent_id(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("XDG_STATE_HOME", "/tmp/xdg")
+    p = state_path("session", "claude-code", "../../etc")
+    assert ".." not in p.name
+    assert p.parent.parent == state_path("session", "claude-code").parent
+
+
+def test_without_deliveries_keeps_observations_and_calls():
+    state = (
+        SessionState()
+        .with_call()
+        .with_fired("r", "t")
+        .with_fired_call("r", 1)
+        .with_observation("Read", "file_path", "a")
+    )
+    cleared = state.without_deliveries()
+    assert not cleared.has_fired("r")
+    assert cleared.last_fired_call("r") is None
+    assert cleared.history("Read", "file_path") == ("a",)
+    assert cleared.calls == 1

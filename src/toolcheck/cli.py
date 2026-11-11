@@ -11,13 +11,20 @@
 
       --claude enables Claude PreToolUse hook behaviour: emits hints as
       additionalContext, denies calls that match error-severity rules,
-      deduplicates once per (session, rule), and evaluates cross-call rules
+      deduplicates once per (session, agent, rule), and evaluates cross-call rules
       (which need per-session history to fire).
 
       --pi emits the toolcheck pi-envelope: pi tool names/inputs are
       normalised to the canonical vocabulary first, then the same
       dedup/cross-call semantics apply with context_length taken straight
       from the payload.
+
+  toolcheck reset [FILE] [--claude] [--pi]
+      Let every rule fire again for the agent a hook payload names, or for
+      the session's main agent and every subagent when it names none,
+      keeping cross-call history. Run it from a SessionStart hook whose
+      matcher is "compact", because a compaction drops the hints the model
+      was given.
 
   toolcheck lint-rules
       Validate every rule in the catalogue: compile stateless predicates,
@@ -61,7 +68,13 @@ from toolcheck.schema import (
     load_errors,
     predicate_fields,
 )
-from toolcheck.state import SessionState, load_state, save_state, state_path
+from toolcheck.state import (
+    SessionState,
+    load_state,
+    save_state,
+    session_state_paths,
+    state_path,
+)
 from toolcheck.transcript import read_context_length
 
 
@@ -272,7 +285,7 @@ def _load_notices() -> list[str]:
 
 def _run_hook(
     payload: dict[str, object],
-    agent: str,
+    harness: str,
     tool: str,
     tool_input: dict[str, object],
     context_length: int | None,
@@ -281,15 +294,17 @@ def _run_hook(
 
     Returns rendered hint strings partitioned by severity (warnings, errors,
     reminders) plus notices about rules that failed to load, each shown once
-    per session like a warning. ``agent`` is the
-    state-directory key ("claude-code" or "pi") and also gives the payload its
-    session/context semantics. Pure apart from state I/O.
+    per agent like a warning. ``harness`` is the state-directory key
+    ("claude-code" or "pi"). A payload's ``agent_id``, which Claude Code sends
+    for a subagent's calls, gives the subagent a state of its own. Pure apart
+    from state I/O.
     """
     session_id = _as_str(payload.get("session_id"))
     has_session = bool(session_id)
     use_dedup = has_session and not _dedup_disabled()
 
-    path = state_path(session_id, agent) if has_session else None  # type: ignore[arg-type]
+    agent_id = _as_str(payload.get("agent_id"))
+    path = state_path(session_id, harness, agent_id) if session_id else None
     state = load_state(path) if path is not None else SessionState()
 
     now = datetime.now(UTC).isoformat()
@@ -419,6 +434,29 @@ def lint_rules(rules: Sequence[Rule]) -> list[str]:
     return problems
 
 
+def _cmd_reset(args: argparse.Namespace) -> int:
+    try:
+        payload = _read_input(args)
+    except (ValueError, TypeError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    session_id = _as_str(payload.get("session_id"))
+    if not session_id:
+        print("error: input lacks 'session_id'", file=sys.stderr)
+        return 2
+    harness = "pi" if args.pi else "claude-code"
+    agent_id = _as_str(payload.get("agent_id"))
+    paths = (
+        [state_path(session_id, harness, agent_id)]
+        if agent_id
+        else session_state_paths(session_id, harness)
+    )
+    for path in paths:
+        if path.exists():
+            save_state(path, load_state(path).without_deliveries())
+    return 0
+
+
 def _cmd_lint_rules(args: argparse.Namespace) -> int:
     rules = load_all_rules()
     problems = [f"{e.path}: {e.message}" for e in load_errors()] + lint_rules(rules)
@@ -456,6 +494,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_check.add_argument("--json", action="store_true", help="emit JSON")
     p_check.set_defaults(func=_cmd_check)
+
+    p_reset = sub.add_parser(
+        "reset", help="let every rule fire again for a hook payload's agent"
+    )
+    p_reset.add_argument("file", nargs="?", help="JSON file; stdin when omitted")
+    reset_harness = p_reset.add_mutually_exclusive_group()
+    reset_harness.add_argument(
+        "--claude", action="store_true", help="reset Claude Code state (the default)"
+    )
+    reset_harness.add_argument("--pi", action="store_true", help="reset pi state")
+    p_reset.set_defaults(func=_cmd_reset)
 
     p_lint = sub.add_parser("lint-rules", help="validate every rule in the catalogue")
     p_lint.set_defaults(func=_cmd_lint_rules)

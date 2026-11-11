@@ -1,4 +1,8 @@
-"""Per-session state: dedup ledger + cross-call observations.
+"""Per-agent state: dedup ledger + cross-call observations.
+
+Each session has one state for its main agent and one per subagent, because a
+subagent starts from its own context and has seen none of the hints its
+parent was given.
 
 On-disk: { "fired": { rule_name: iso_timestamp }, "seen": { "<tool>\\x1f<field>": [value, ...] }, "calls": n, "fired_call": { rule_name: call_index } }
 
@@ -58,6 +62,14 @@ class SessionState:
             fired_call={**self.fired_call, rule_name: call},
         )
 
+    def without_deliveries(self) -> SessionState:
+        """Forget which rules fired, keeping observations and the call count.
+
+        After a compaction the model no longer holds the hints it was given,
+        so each rule should be able to fire again.
+        """
+        return SessionState(seen=self.seen, calls=self.calls)
+
     def history(self, tool: str, field_name: str) -> tuple[str, ...]:
         return self.seen.get(_seen_key(tool, field_name), ())
 
@@ -76,11 +88,28 @@ def _seen_key(tool: str, field_name: str) -> str:
     return f"{tool}{_KEY_SEP}{field_name}"
 
 
-def state_path(session_id: str, agent: str) -> Path:
+def state_path(session_id: str, harness: str, agent_id: str | None = None) -> Path:
+    """The state file of a session's main agent, or of one of its subagents.
+
+    A subagent's file sits in a directory named after the session, so no
+    session id and agent id can name the same file as another session.
+    """
     base = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state")))
-    # session_id is untrusted — sanitise path-traversal characters.
-    safe = session_id.replace("/", "_").replace("\\", "_").replace("..", "_")
-    return base / agent / "toolcheck" / f"{safe}.json"
+    directory = base / harness / "toolcheck"
+    if not agent_id:
+        return directory / f"{_safe(session_id)}.json"
+    return directory / f"{_safe(session_id)}.agents" / f"{_safe(agent_id)}.json"
+
+
+def session_state_paths(session_id: str, harness: str) -> list[Path]:
+    """The state files of a session's main agent and every subagent that has one."""
+    main = state_path(session_id, harness)
+    return [main, *sorted(main.with_suffix(".agents").glob("*.json"))]
+
+
+def _safe(identifier: str) -> str:
+    # Hook payload ids are untrusted — sanitise path-traversal characters.
+    return identifier.replace("/", "_").replace("\\", "_").replace("..", "_")
 
 
 def _as_dict(x: object) -> dict[str, object] | None:
