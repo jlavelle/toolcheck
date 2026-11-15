@@ -3,9 +3,10 @@
 Cross-call rules are excluded — callers filter with is_stateless() before
 compiling. Cross-call evaluation lives in toolcheck.crosscall.
 
-An ``Env`` bundles the tool_input with ambient session facts (currently the
-current context length). Field predicates read tool_input; the context-length
-predicate reads the ambient value.
+An ``Env`` bundles the tool_input with ambient session facts: the current
+context length and the agent's state before this call. Field predicates read
+tool_input; the context-length and prior-call predicates read the ambient
+values.
 
 A predicate's ``field`` is resolved by ``resolve_field``: an @-prefixed name
 is a derived field (a pure extractor in ``_DERIVED``); any other name is a raw
@@ -18,7 +19,7 @@ import json
 import operator
 import re
 from collections.abc import Callable, Mapping, Sized
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from toolcheck import bash as _bash
 from toolcheck.schema import (
@@ -31,9 +32,11 @@ from toolcheck.schema import (
     NotPredicate,
     Predicate,
     PresencePredicate,
+    PriorCallPredicate,
     RegexPredicate,
     Rule,
 )
+from toolcheck.state import SessionState
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,7 @@ class Env:
 
     tool_input: Mapping[str, object]
     context_length: int | None = None
+    state: SessionState = field(default_factory=SessionState)
 
 
 Matcher = Callable[["Env"], bool]
@@ -162,6 +166,9 @@ def _compile_predicate(pred: Predicate) -> Matcher:
                 return env.context_length is not None and _cmp(env.context_length, _v)
 
             return _context_length
+
+        case PriorCallPredicate(tool=t, field=f, value=v):
+            return lambda env: v in env.state.history(t, f)
 
         case NotPredicate(operand=op):
             inner = _compile_predicate(op)

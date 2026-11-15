@@ -171,6 +171,7 @@ A predicate tests a `field` of the tool input. Compose them freely with `not`, `
 | in        | `{ in = { field = "@last_pipe_command", values = ["head", "tail"] } }` | the field is one of the values            |
 | length    | `{ length = { field = "content", op = ">", value = 1500 } }`           | the field's length (characters of a string, items of a list or object) compares true |
 | context_length | `{ context_length = { op = ">", value = 120000 } }`               | the session's context length compares true (see below) |
+| prior_call | `{ prior_call = { tool = "Skill", field = "skill", value = "ghci" } }` | an earlier call by this agent to the tool had the value in the field (see below) |
 | not       | `{ not = <predicate> }`                                                | the inner predicate fails                 |
 | all       | `{ all = [ <predicate>, … ] }`                                         | every operand holds                       |
 | any       | `{ any = [ <predicate>, … ] }`                                         | some operand holds                        |
@@ -207,6 +208,28 @@ all = [
     { absent = "limit" },
 ]
 ```
+
+#### Prior calls
+
+`prior_call` holds when an earlier call by the same agent, to the tool it names, had exactly `value` in `field`. Like `context_length` it reads no field of the current call, so it composes freely with `not`/`all`/`any`, and its tool can differ from the rule's. Its main use is refusing a command until the agent has loaded the skill that covers it:
+
+```toml
+[[rule]]
+name     = "ghci-skill"
+tool     = "Bash"
+message  = "load the ghci skill before running ghci — then retry this command"
+severity = "error"
+[rule.match]
+all = [
+    { regex = { field = "command", pattern = '(^|&&|;|\|)\s*(ghci|cabal repl|stack ghci)\b' } },
+    { not = { prior_call = { tool = "Skill", field = "skill", value = "ghci" } } },
+]
+```
+
+- The hook records a call only when it sees it, so the hook's matcher must include the named tool, here `Skill`.
+- `field` is a raw key of the named tool's input; derived `@`-fields are not recorded.
+- History is per agent: a subagent starts with none, like its hints. `toolcheck reset` keeps it.
+- Plain `check` has no history, so `prior_call` is `False` there and `not { prior_call = … }` holds.
 
 ### Regex engine
 

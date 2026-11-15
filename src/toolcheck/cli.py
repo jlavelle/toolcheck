@@ -57,7 +57,6 @@ from toolcheck.compile import (
     resolve_field,
 )
 from toolcheck.crosscall import evaluate as eval_cross_call
-from toolcheck.crosscall import field_value
 from toolcheck.pi import normalise
 from toolcheck.schema import (
     Rule,
@@ -67,6 +66,7 @@ from toolcheck.schema import (
     load_catalogue,
     load_errors,
     predicate_fields,
+    prior_calls,
 )
 from toolcheck.state import (
     SessionState,
@@ -132,14 +132,16 @@ def evaluate_call(
     """Evaluate every rule for the tool against the input and prior state.
 
     Returns the rules that fired and the updated state (new fired entries for
-    stateless rules, plus recorded observations for cross-call fields). Pure:
+    stateless rules, plus observations of the fields that cross_call and
+    prior_call predicates read from history). Pure:
     no I/O, deterministic given its arguments. ``context_length`` is the
     current session context length in tokens, or None when unknown.
     ``call_index`` is the session's 1-based tool-call count; rules with
     ``every_calls`` need it to throttle, and fire unrestricted when it is None.
     """
+    observed_fields = _observed_fields(tool_name, rules)
     rules = [r for r in rules if r.tool == tool_name]
-    env = Env(tool_input, context_length)
+    env = Env(tool_input, context_length, state)
     fired: list[Rule] = []
     next_state = state
 
@@ -171,17 +173,31 @@ def evaluate_call(
                 elif rule.dedup:
                     next_state = next_state.with_fired(rule.name, now)
 
-    observed: set[tuple[str, str]] = set()  # two rules on one field: record once
-    for rule in rules:
-        cc = cross_call_of(rule)
-        if cc is None:
-            continue
-        value = field_value(cc, tool_input)
-        if value is not None and (cc.field, value) not in observed:
-            observed.add((cc.field, value))
-            next_state = next_state.with_observation(tool_name, cc.field, value)
+    for field in observed_fields:
+        value = tool_input.get(field)
+        if value is not None:
+            next_state = next_state.with_observation(
+                tool_name, field, field_text(value)
+            )
 
     return fired, next_state
+
+
+def _observed_fields(tool_name: str, rules: Sequence[Rule]) -> list[str]:
+    """The fields of this tool's input that some rule reads from history, each once.
+
+    A cross_call rule on the tool tracks its field; a prior_call naming the
+    tool, in a rule on any tool, tracks the field it names.
+    """
+    fields: dict[str, None] = {}
+    for rule in rules:
+        cc = cross_call_of(rule)
+        if cc is not None and rule.tool == tool_name:
+            fields[cc.field] = None
+        for pc in prior_calls(rule.match):
+            if pc.tool == tool_name:
+                fields[pc.field] = None
+    return list(fields)
 
 
 def _cmd_list(args: argparse.Namespace) -> int:

@@ -14,6 +14,7 @@ from toolcheck.schema import (
     NotPredicate,
     Predicate,
     PresencePredicate,
+    PriorCallPredicate,
     RegexPredicate,
     Rule,
 )
@@ -63,7 +64,10 @@ def _leaf_predicates() -> st.SearchStrategy[Predicate]:
         ),
         field=NONEMPTY_TEXT,
     )
-    return st.one_of(regex, presence, value, length, context_length, cross)
+    prior = st.builds(
+        PriorCallPredicate, tool=NONEMPTY_TEXT, field=NONEMPTY_TEXT, value=NONEMPTY_TEXT
+    )
+    return st.one_of(regex, presence, value, length, context_length, cross, prior)
 
 
 def predicates() -> st.SearchStrategy[Predicate]:

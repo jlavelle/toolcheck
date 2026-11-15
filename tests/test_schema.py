@@ -20,6 +20,7 @@ from toolcheck.schema import (
     NotPredicate,
     Predicate,
     PresencePredicate,
+    PriorCallPredicate,
     RegexPredicate,
     clear_rule_cache,
     cross_call_of,
@@ -66,6 +67,8 @@ def pred_to_toml(p: Predicate) -> dict[str, object]:
             return {"any": [pred_to_toml(o) for o in ops]}
         case CrossCallPredicate(kind=k, field=f):
             return {"cross_call": {"kind": k, "field": f}}
+        case PriorCallPredicate(tool=t, field=f, value=v):
+            return {"prior_call": {"tool": t, "field": f, "value": v}}
 
 
 @given(predicates())

@@ -91,6 +91,19 @@ class CrossCallPredicate:
     field: str  # which tool_input field to track across calls
 
 
+@dataclass(frozen=True)
+class PriorCallPredicate:
+    """An earlier call this agent made to ``tool`` had ``value`` in ``field``.
+
+    Ambient like ContextLengthPredicate: it reads the agent's history rather
+    than the current input, so it composes with every other predicate.
+    """
+
+    tool: str
+    field: str
+    value: str
+
+
 Predicate = (
     RegexPredicate
     | PresencePredicate
@@ -101,6 +114,7 @@ Predicate = (
     | AllPredicate
     | AnyPredicate
     | CrossCallPredicate
+    | PriorCallPredicate
 )
 
 
@@ -150,6 +164,7 @@ _PREDICATE_KEYS: frozenset[str] = frozenset(
         "all",
         "any",
         "cross_call",
+        "prior_call",
     }
 )
 
@@ -249,6 +264,13 @@ def parse_predicate(d: object) -> Predicate:
     if "any" in m:
         return AnyPredicate(
             operands=tuple(parse_predicate(p) for p in _seq(m["any"], "any"))
+        )
+    if "prior_call" in m:
+        pc = _mapping(m["prior_call"], "prior_call")
+        return PriorCallPredicate(
+            tool=_string(pc["tool"], "prior_call.tool"),
+            field=_string(pc["field"], "prior_call.field"),
+            value=_string(pc["value"], "prior_call.value"),
         )
     cc = _mapping(m["cross_call"], "cross_call")
     kind = _string(cc["kind"], "cross_call.kind")
@@ -454,6 +476,7 @@ def _pred_has_cross_call(pred: Predicate) -> bool:
             | InPredicate()
             | LengthPredicate()
             | ContextLengthPredicate()
+            | PriorCallPredicate()
         ):
             return False
 
@@ -479,8 +502,29 @@ def predicate_fields(pred: Predicate) -> Iterator[str]:
         case AllPredicate(operands=ops) | AnyPredicate(operands=ops):
             for o in ops:
                 yield from predicate_fields(o)
-        case ContextLengthPredicate():
-            return  # ambient, references no tool-input field
+        case ContextLengthPredicate() | PriorCallPredicate():
+            return  # ambient, references no field of this rule's tool input
+
+
+def prior_calls(pred: Predicate) -> Iterator[PriorCallPredicate]:
+    """Every PriorCallPredicate in the predicate tree."""
+    match pred:
+        case PriorCallPredicate():
+            yield pred
+        case NotPredicate(operand=op):
+            yield from prior_calls(op)
+        case AllPredicate(operands=ops) | AnyPredicate(operands=ops):
+            for o in ops:
+                yield from prior_calls(o)
+        case (
+            RegexPredicate()
+            | PresencePredicate()
+            | InPredicate()
+            | LengthPredicate()
+            | ContextLengthPredicate()
+            | CrossCallPredicate()
+        ):
+            return
 
 
 def cross_call_of(rule: Rule) -> CrossCallPredicate | None:

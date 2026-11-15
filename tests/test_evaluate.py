@@ -7,7 +7,14 @@ from hypothesis import strategies as st
 
 from strategies import make_rule
 from toolcheck.cli import evaluate_call, render
-from toolcheck.schema import CrossCallPredicate, RegexPredicate, Rule
+from toolcheck.schema import (
+    AllPredicate,
+    CrossCallPredicate,
+    NotPredicate,
+    PriorCallPredicate,
+    RegexPredicate,
+    Rule,
+)
 from toolcheck.state import SessionState
 
 
@@ -172,3 +179,38 @@ def test_every_calls_spacing(interval: int, n_calls: int):
     assert _drive_calls(_every_calls_rule(interval), n_calls) == list(
         range(1, n_calls + 1, interval)
     )
+
+
+def _ghci_unloaded_rule() -> Rule:
+    return make_rule(
+        AllPredicate(
+            (
+                RegexPredicate(field="command", pattern=r"\bcabal repl\b"),
+                NotPredicate(
+                    PriorCallPredicate(tool="Skill", field="skill", value="ghci")
+                ),
+            )
+        ),
+        name="load-ghci",
+    )
+
+
+def test_prior_call_on_another_tool_silences_the_rule():
+    rule = _ghci_unloaded_rule()
+    repl = {"command": "cabal repl"}
+    fired_before, _ = evaluate_call("Bash", repl, SessionState(), False, "t1", [rule])
+    _, loaded = evaluate_call(
+        "Skill", {"skill": "ghci"}, SessionState(), False, "t2", [rule]
+    )
+    fired_after, _ = evaluate_call("Bash", repl, loaded, False, "t3", [rule])
+    assert "load-ghci" in _names(fired_before)
+    assert "load-ghci" not in _names(fired_after)
+
+
+def test_prior_call_needs_the_named_value_on_the_named_tool():
+    rule = _ghci_unloaded_rule()
+    repl = {"command": "cabal repl"}
+    for tool, skill in [("Skill", "playwright"), ("Agent", "ghci")]:
+        state = SessionState().with_observation(tool, "skill", skill)
+        fired, _ = evaluate_call("Bash", repl, state, False, "t", [rule])
+        assert "load-ghci" in _names(fired), (tool, skill)
