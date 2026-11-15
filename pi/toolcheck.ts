@@ -46,6 +46,32 @@ interface Envelope {
   reminders?: string[];
 }
 
+type CheckOutcome =
+  | { kind: "checked"; envelope: Envelope }
+  | { kind: "unavailable"; reason: string };
+
+const parseEnvelope = (stdout: string): Envelope | undefined => {
+  try {
+    const envelope = JSON.parse(stdout) as Envelope;
+    return envelope.decision === "allow" || envelope.decision === "deny" ? envelope : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const check = async (payload: string): Promise<CheckOutcome> => {
+  let stdout: string;
+  try {
+    stdout = await runCheck(payload);
+  } catch (error) {
+    return { kind: "unavailable", reason: error instanceof Error ? error.message : String(error) };
+  }
+  const envelope = parseEnvelope(stdout);
+  return envelope
+    ? { kind: "checked", envelope }
+    : { kind: "unavailable", reason: "unparseable output" };
+};
+
 const rootCallId = (toolCallId: string): string => toolCallId.split("/", 1)[0];
 
 export default function (pi: ExtensionAPI) {
@@ -55,8 +81,14 @@ export default function (pi: ExtensionAPI) {
   const addHints = (toolCallId: string, hints: string[]): void => {
     const root = rootCallId(toolCallId);
     const bucket = hintsByCall.get(root) ?? [];
-    for (const hint of hints) if (!bucket.includes(hint)) bucket.push(hint);
-    if (bucket.length) hintsByCall.set(root, bucket);
+    for (const hint of hints) {
+      if (!bucket.includes(hint)) {
+        bucket.push(hint);
+      }
+    }
+    if (bucket.length > 0) {
+      hintsByCall.set(root, bucket);
+    }
   };
 
   const failOpen = (ctx: ExtensionContext, message: string): void => {
@@ -75,24 +107,12 @@ export default function (pi: ExtensionAPI) {
       context_length: ctx.getContextUsage()?.tokens ?? null,
     };
 
-    let stdout: string;
-    try {
-      stdout = await runCheck(JSON.stringify(payload));
-    } catch (error) {
-      failOpen(ctx, error instanceof Error ? error.message : String(error));
+    const outcome = await check(JSON.stringify(payload));
+    if (outcome.kind === "unavailable") {
+      failOpen(ctx, outcome.reason);
       return;
     }
-
-    let envelope: Envelope;
-    try {
-      envelope = JSON.parse(stdout) as Envelope;
-      if (envelope.decision !== "allow" && envelope.decision !== "deny") {
-        throw new Error(`bad decision: ${String(envelope.decision)}`);
-      }
-    } catch {
-      failOpen(ctx, "unparseable output");
-      return;
-    }
+    const { envelope } = outcome;
 
     addHints(event.toolCallId, [...(envelope.warnings ?? []), ...(envelope.reminders ?? [])]);
     if (envelope.decision === "deny") {
@@ -106,9 +126,13 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("message_end", (event) => {
     const message = event.message;
-    if (message.role !== "toolResult") return;
+    if (message.role !== "toolResult") {
+      return;
+    }
     const hints = hintsByCall.get(message.toolCallId);
-    if (!hints?.length) return;
+    if (!hints?.length) {
+      return;
+    }
     hintsByCall.delete(message.toolCallId);
     return {
       message: {

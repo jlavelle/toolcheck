@@ -6,10 +6,13 @@
 //
 // Run: bun test pi/toolcheck.test.ts
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Each tool call spawns the stub through node, and the property tests make 60 to 80 calls.
+setDefaultTimeout(30_000);
 
 const tmp = mkdtempSync(join(tmpdir(), "toolcheck-test-"));
 const bin = join(tmp, "fake-toolcheck");
@@ -20,7 +23,14 @@ const { default: makeExtension } = await import("./toolcheck.ts");
 type Envelope =
   | { decision: "allow" | "deny"; warnings?: string[]; errors?: string[]; reminders?: string[] }
   | "fail";
-type Handler = (event: any, ctx: any) => any;
+type HandlerResult =
+  | {
+      message?: { role: string; toolCallId: string; content: unknown[] };
+      block?: true;
+      reason?: string;
+    }
+  | undefined;
+type Handler = (event: unknown, ctx: unknown) => HandlerResult | Promise<HandlerResult>;
 
 const makePi = () => {
   const handlers = new Map<string, Handler[]>();
@@ -34,16 +44,23 @@ const makePi = () => {
   return { api, handlers };
 };
 
-const fire = async (handlers: Map<string, Handler[]>, name: string, event: any, ctx: any) => {
-  let result: any;
-  for (const handler of handlers.get(name) ?? []) result = await handler(event, ctx);
+const fire = async (
+  handlers: Map<string, Handler[]>,
+  name: string,
+  event: unknown,
+  ctx: unknown,
+): Promise<HandlerResult> => {
+  let result: HandlerResult;
+  for (const handler of handlers.get(name) ?? []) {
+    result = await handler(event, ctx);
+  }
   return result;
 };
 
 const mkCtx = () => ({
   sessionManager: { getSessionId: () => "test-session" },
   getContextUsage: () => ({ tokens: 42 }),
-  ui: { notify: () => {} },
+  ui: { notify: () => undefined },
 });
 
 const toolResultMessage = (id: string, text = "original") => ({
@@ -77,10 +94,36 @@ process.stdin.on("end", () => {
   chmodSync(bin, 0o755);
 };
 
-const lcg = (seed: number) => () => {
-  seed = (seed * 1103515245 + 12345) % 2 ** 31;
-  return seed / 2 ** 31;
+const lcg = (seed: number) => {
+  let state = seed;
+  return () => {
+    state = (state * 1_103_515_245 + 12_345) % 2 ** 31;
+    return state / 2 ** 31;
+  };
 };
+
+interface TreeCall {
+  id: string;
+  parent: string | undefined;
+}
+
+const randomCallTree = (rand: () => number, n: number): TreeCall[] => {
+  const calls: TreeCall[] = [];
+  for (let i = 0; i < n; i++) {
+    const parent =
+      calls.length > 0 && rand() < 0.7 ? calls[Math.floor(rand() * calls.length)]?.id : undefined;
+    calls.push({ id: parent ? `${parent}/${i}` : `c${i}`, parent });
+  }
+  return calls;
+};
+
+const appendedHint = (patch: HandlerResult) =>
+  patch === undefined
+    ? undefined
+    : { length: patch.message?.content.length, hint: patch.message?.content[1] };
+
+const expectedHint = (hints: readonly string[] | undefined) =>
+  hints?.length ? { length: 2, hint: { type: "text", text: hints.join("\n\n") } } : undefined;
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -249,7 +292,7 @@ describe("pi/toolcheck.ts", () => {
   });
 
   test("property: over random call trees every distinct hint reaches its root exactly once", async () => {
-    const rand = lcg(20261002);
+    const rand = lcg(20_261_002);
     const n = 80;
     const warningsOf = Array.from({ length: n }, (_, i) => (rand() < 0.5 ? [`w${i % 5}`] : []));
     setStub(warningsOf.map((warnings) => ({ decision: "allow", warnings })));
@@ -257,12 +300,10 @@ describe("pi/toolcheck.ts", () => {
     makeExtension(api);
     const ctx = mkCtx();
 
-    const ids: string[] = [];
+    const calls = randomCallTree(rand, n);
+    const ids = calls.map((call) => call.id);
     const expected = new Map<string, string[]>();
-    for (let i = 0; i < n; i++) {
-      const parent = ids.length && rand() < 0.7 ? ids[Math.floor(rand() * ids.length)] : undefined;
-      const id = parent ? `${parent}/${i}` : `c${i}`;
-      ids.push(id);
+    for (const [i, { id, parent }] of calls.entries()) {
       await fire(
         handlers,
         "tool_call",
@@ -275,23 +316,19 @@ describe("pi/toolcheck.ts", () => {
         ctx,
       );
       const root = id.split("/")[0];
-      const bucket = expected.get(root) ?? [];
-      for (const hint of warningsOf[i]) if (!bucket.includes(hint)) bucket.push(hint);
-      expected.set(root, bucket);
+      expected.set(root, [...new Set([...(expected.get(root) ?? []), ...warningsOf[i]])]);
     }
 
-    for (const id of ids) {
-      if (id.includes("/")) {
-        expect(
-          await fire(handlers, "message_end", { message: toolResultMessage(id) }, ctx),
-        ).toBeUndefined();
-      }
+    const nestedPatches: HandlerResult[] = [];
+    for (const id of ids.filter((callId) => callId.includes("/"))) {
+      nestedPatches.push(
+        await fire(handlers, "message_end", { message: toolResultMessage(id) }, ctx),
+      );
     }
+    expect(nestedPatches.filter((patch) => patch !== undefined)).toEqual([]);
     for (const [root, hints] of expected) {
       const patch = await fire(handlers, "message_end", { message: toolResultMessage(root) }, ctx);
-      if (hints.length)
-        expect(patch?.message?.content[1]).toEqual({ type: "text", text: hints.join("\n\n") });
-      else expect(patch).toBeUndefined();
+      expect(appendedHint(patch)).toEqual(expectedHint(hints));
       expect(
         await fire(handlers, "message_end", { message: toolResultMessage(root) }, ctx),
       ).toBeUndefined();
@@ -310,11 +347,13 @@ describe("pi/toolcheck.ts", () => {
   });
 
   test("mixed allow/deny/fail: each warning list delivered exactly once", async () => {
-    const rand = lcg(20260826);
+    const rand = lcg(20_260_826);
     const n = 60;
     const envelopes: Envelope[] = Array.from({ length: n }, () => {
       const roll = rand();
-      if (roll < 0.2) return "fail";
+      if (roll < 0.2) {
+        return "fail";
+      }
       const decision = roll < 0.6 ? "deny" : "allow";
       const warnings = Array.from({ length: 1 + Math.floor(rand() * 3) }, (_, i) => `w${i}`);
       return decision === "deny" ? { decision, warnings, errors: ["[e]"] } : { decision, warnings };
@@ -333,19 +372,14 @@ describe("pi/toolcheck.ts", () => {
         { toolName: `t${i}`, toolCallId: id, input: {} },
         ctx,
       );
-      if (envelope === "fail") expect(result).toBeUndefined();
-      else if (envelope.decision === "deny") expect(result).toEqual({ block: true, reason: "[e]" });
-      else expect(result).toBeUndefined();
+      const blocked = envelope !== "fail" && envelope.decision === "deny";
+      expect(result).toEqual(blocked ? { block: true, reason: "[e]" } : undefined);
 
       const message = toolResultMessage(id, `out-${i}`);
       const patch = await fire(handlers, "message_end", { message }, ctx);
-      const warnings = envelope === "fail" ? undefined : envelope.warnings;
-      if (warnings?.length) {
-        expect(patch?.message?.content).toHaveLength(2);
-        expect(patch?.message?.content[1]).toEqual({ type: "text", text: warnings.join("\n\n") });
-      } else {
-        expect(patch).toBeUndefined();
-      }
+      expect(appendedHint(patch)).toEqual(
+        expectedHint(envelope === "fail" ? undefined : envelope.warnings),
+      );
       expect(message.content).toHaveLength(1);
 
       // consumed: a second message_end for the same id delivers nothing

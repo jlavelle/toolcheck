@@ -2,5 +2,17 @@
   "extends": ["./biome.base.json"],
   "files": {
     "includes": ["pi/**"]
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["pi/toolcheck.ts"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnresolvedImports": "off"
+          }
+        }
+      }
+    }
+  ]
 }
