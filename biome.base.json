@@ -1,0 +1,99 @@
+{
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double"
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "domains": {
+      "next": "none",
+      "qwik": "none",
+      "solid": "none",
+      "vue": "none"
+    },
+    "rules": {
+      "preset": "all",
+      "complexity": {
+        "noExcessiveLinesPerFunction": "off",
+        "noVoid": "off"
+      },
+      "correctness": {
+        "noNodejsModules": "off",
+        "noProcessGlobal": "off",
+        "noUndeclaredDependencies": "off",
+        "noUndeclaredVariables": "off"
+      },
+      "performance": {
+        "noAwaitInLoops": "off",
+        "noJsxPropsBind": "off",
+        "noNamespaceImport": "off"
+      },
+      "security": {
+        "noSecrets": "off"
+      },
+      "style": {
+        "noContinue": "off",
+        "noDefaultExport": "off",
+        "noExcessiveClassesPerFile": "off",
+        "noExcessiveLinesPerFile": "off",
+        "noImplicitBoolean": "off",
+        "noIncrementDecrement": "off",
+        "noJsxLiterals": "off",
+        "noMagicNumbers": "off",
+        "noParameterProperties": "off",
+        "noProcessEnv": "off",
+        "noTernary": "off",
+        "useComponentExportOnlyModules": "off",
+        "useConsistentTestIt": {
+          "level": "on",
+          "options": {
+            "function": "test",
+            "withinDescribe": "test"
+          }
+        },
+        "useDefaultSwitchClause": "off",
+        "useDestructuring": "off",
+        "useExportsLast": "off",
+        "useNamingConvention": "off"
+      },
+      "suspicious": {
+        "noBitwiseOperators": "off",
+        "noConsole": "off",
+        "noReactSpecificProps": "off",
+        "noUnknownAttribute": "off"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/*.test.ts", "**/*.test.tsx", "test/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off"
+          }
+        }
+      }
+    }
+  ]
+}

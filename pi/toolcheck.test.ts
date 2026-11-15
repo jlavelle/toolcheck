@@ -104,7 +104,9 @@ describe("pi/toolcheck.ts", () => {
     expect(message.content).toHaveLength(1); // the passed message is not mutated
 
     // consumed: a second message_end for the same id delivers nothing
-    expect(await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx)).toBeUndefined();
+    expect(
+      await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx),
+    ).toBeUndefined();
   });
 
   test("allow + warnings + reminders: both appended in order", async () => {
@@ -134,11 +136,18 @@ describe("pi/toolcheck.ts", () => {
     );
     expect(blocked).toEqual({ block: true, reason: "[e1] no" });
 
-    const patch = await fire(handlers, "message_end", { message: toolResultMessage("c0", "blocked") }, ctx);
+    const patch = await fire(
+      handlers,
+      "message_end",
+      { message: toolResultMessage("c0", "blocked") },
+      ctx,
+    );
     expect(patch?.message?.content).toHaveLength(2);
     expect(patch?.message?.content[1]).toEqual({ type: "text", text: "w" });
 
-    expect(await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx)).toBeUndefined();
+    expect(
+      await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx),
+    ).toBeUndefined();
   });
 
   test("message_end for other roles or unknown ids: no result, no mutation", async () => {
@@ -149,7 +158,11 @@ describe("pi/toolcheck.ts", () => {
 
     await fire(handlers, "tool_call", { toolName: "t0", toolCallId: "c0", input: {} }, ctx);
 
-    const assistant = { role: "assistant", toolCallId: "c0", content: [{ type: "text", text: "hi" }] };
+    const assistant = {
+      role: "assistant",
+      toolCallId: "c0",
+      content: [{ type: "text", text: "hi" }],
+    };
     expect(await fire(handlers, "message_end", { message: assistant }, ctx)).toBeUndefined();
     expect(assistant.content).toHaveLength(1);
 
@@ -163,32 +176,57 @@ describe("pi/toolcheck.ts", () => {
   });
 
   test("nested calls: hints delivered on the parent's toolResult, none on the nested id", async () => {
-    setStub([{ decision: "allow" }, { decision: "allow", warnings: ["w1"] }, { decision: "allow", reminders: ["r2"] }]);
+    setStub([
+      { decision: "allow" },
+      { decision: "allow", warnings: ["w1"] },
+      { decision: "allow", reminders: ["r2"] },
+    ]);
     const { api, handlers } = makePi();
     makeExtension(api);
     const ctx = mkCtx();
 
     await fire(handlers, "tool_call", { toolName: "t0", toolCallId: "c0", input: {} }, ctx);
-    await fire(handlers, "tool_call", { toolName: "t1", toolCallId: "c0/1", parentToolCallId: "c0", input: {} }, ctx);
-    await fire(handlers, "tool_call", { toolName: "t2", toolCallId: "c0/1/1", parentToolCallId: "c0/1", input: {} }, ctx);
+    await fire(
+      handlers,
+      "tool_call",
+      { toolName: "t1", toolCallId: "c0/1", parentToolCallId: "c0", input: {} },
+      ctx,
+    );
+    await fire(
+      handlers,
+      "tool_call",
+      { toolName: "t2", toolCallId: "c0/1/1", parentToolCallId: "c0/1", input: {} },
+      ctx,
+    );
 
-    expect(await fire(handlers, "message_end", { message: toolResultMessage("c0/1") }, ctx)).toBeUndefined();
+    expect(
+      await fire(handlers, "message_end", { message: toolResultMessage("c0/1") }, ctx),
+    ).toBeUndefined();
 
     const patch = await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx);
     expect(patch?.message?.content).toHaveLength(2);
     expect(patch?.message?.content[1]).toEqual({ type: "text", text: "w1\n\nr2" });
-    expect(await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx)).toBeUndefined();
+    expect(
+      await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx),
+    ).toBeUndefined();
   });
 
   test("nested deny: blocked, and the reason surfaces on the parent even if the script swallowed it", async () => {
-    setStub([{ decision: "allow" }, { decision: "deny", errors: ["[e1] no"] }, { decision: "deny", errors: ["[e1] no"] }]);
+    setStub([
+      { decision: "allow" },
+      { decision: "deny", errors: ["[e1] no"] },
+      { decision: "deny", errors: ["[e1] no"] },
+    ]);
     const { api, handlers } = makePi();
     makeExtension(api);
     const ctx = mkCtx();
 
     await fire(handlers, "tool_call", { toolName: "t0", toolCallId: "c0", input: {} }, ctx);
     const nested = { toolName: "t1", toolCallId: "c0/1", parentToolCallId: "c0", input: {} };
-    expect(await fire(handlers, "tool_call", nested, ctx)).toEqual({ block: true, reason: "[e1] no" });
+    expect(await fire(handlers, "tool_call", nested, ctx)).toEqual({
+      block: true,
+      reason: "[e1] no",
+    });
     await fire(handlers, "tool_call", { ...nested, toolName: "t2", toolCallId: "c0/2" }, ctx);
 
     const patch = await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx);
@@ -205,7 +243,9 @@ describe("pi/toolcheck.ts", () => {
     const ctx = mkCtx();
 
     await fire(handlers, "tool_call", { toolName: "t0", toolCallId: "c0", input: {} }, ctx);
-    expect(await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx)).toBeUndefined();
+    expect(
+      await fire(handlers, "message_end", { message: toolResultMessage("c0") }, ctx),
+    ).toBeUndefined();
   });
 
   test("property: over random call trees every distinct hint reaches its root exactly once", async () => {
@@ -226,7 +266,12 @@ describe("pi/toolcheck.ts", () => {
       await fire(
         handlers,
         "tool_call",
-        { toolName: `t${i}`, toolCallId: id, input: {}, ...(parent ? { parentToolCallId: parent } : {}) },
+        {
+          toolName: `t${i}`,
+          toolCallId: id,
+          input: {},
+          ...(parent ? { parentToolCallId: parent } : {}),
+        },
         ctx,
       );
       const root = id.split("/")[0];
@@ -237,14 +282,19 @@ describe("pi/toolcheck.ts", () => {
 
     for (const id of ids) {
       if (id.includes("/")) {
-        expect(await fire(handlers, "message_end", { message: toolResultMessage(id) }, ctx)).toBeUndefined();
+        expect(
+          await fire(handlers, "message_end", { message: toolResultMessage(id) }, ctx),
+        ).toBeUndefined();
       }
     }
     for (const [root, hints] of expected) {
       const patch = await fire(handlers, "message_end", { message: toolResultMessage(root) }, ctx);
-      if (hints.length) expect(patch?.message?.content[1]).toEqual({ type: "text", text: hints.join("\n\n") });
+      if (hints.length)
+        expect(patch?.message?.content[1]).toEqual({ type: "text", text: hints.join("\n\n") });
       else expect(patch).toBeUndefined();
-      expect(await fire(handlers, "message_end", { message: toolResultMessage(root) }, ctx)).toBeUndefined();
+      expect(
+        await fire(handlers, "message_end", { message: toolResultMessage(root) }, ctx),
+      ).toBeUndefined();
     }
   });
 
@@ -267,9 +317,7 @@ describe("pi/toolcheck.ts", () => {
       if (roll < 0.2) return "fail";
       const decision = roll < 0.6 ? "deny" : "allow";
       const warnings = Array.from({ length: 1 + Math.floor(rand() * 3) }, (_, i) => `w${i}`);
-      return decision === "deny"
-        ? { decision, warnings, errors: ["[e]"] }
-        : { decision, warnings };
+      return decision === "deny" ? { decision, warnings, errors: ["[e]"] } : { decision, warnings };
     });
     setStub(envelopes);
     const { api, handlers } = makePi();
@@ -279,7 +327,12 @@ describe("pi/toolcheck.ts", () => {
     for (let i = 0; i < n; i++) {
       const id = `c${i}`;
       const envelope = envelopes[i];
-      const result = await fire(handlers, "tool_call", { toolName: `t${i}`, toolCallId: id, input: {} }, ctx);
+      const result = await fire(
+        handlers,
+        "tool_call",
+        { toolName: `t${i}`, toolCallId: id, input: {} },
+        ctx,
+      );
       if (envelope === "fail") expect(result).toBeUndefined();
       else if (envelope.decision === "deny") expect(result).toEqual({ block: true, reason: "[e]" });
       else expect(result).toBeUndefined();
@@ -296,7 +349,9 @@ describe("pi/toolcheck.ts", () => {
       expect(message.content).toHaveLength(1);
 
       // consumed: a second message_end for the same id delivers nothing
-      expect(await fire(handlers, "message_end", { message: toolResultMessage(id) }, ctx)).toBeUndefined();
+      expect(
+        await fire(handlers, "message_end", { message: toolResultMessage(id) }, ctx),
+      ).toBeUndefined();
     }
   });
 });

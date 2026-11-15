@@ -16,7 +16,7 @@ nix run github:jlavelle/toolcheck -- check --claude
 
 ## Development
 
-`nix develop` gives a shell with Python, uv, just, ruff, bun and Node. In it, run the tests and checks:
+`nix develop` gives a shell with Python, uv, just, ruff, Biome, bun and Node. `just check` runs pyright, ruff, and Biome over the pi extension. In it, run the tests and checks:
 
 ```sh
 uv run pytest

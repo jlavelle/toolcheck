@@ -63,6 +63,7 @@
             pkgs.python3
             pkgs.uv
             pkgs.just
+            pkgs.biome
             pkgs.bun
             pkgs.nodejs
             pkgs.ruff
