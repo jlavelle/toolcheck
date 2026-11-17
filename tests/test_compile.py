@@ -25,6 +25,7 @@ from toolcheck.schema import (
     AstQuery,
     ContextLengthPredicate,
     CwdPredicate,
+    InContextPredicate,
     InPredicate,
     NotPredicate,
     Predicate,
@@ -120,6 +121,15 @@ def test_cwd_searches_the_working_directory(cwd: str | None, needle: str):
     rule = make_rule(CwdPredicate(pattern=re.escape(needle)))
     expected = cwd is not None and needle in cwd
     assert compile_rule(rule)(Env({}, cwd=cwd)) is expected
+
+
+@given(st.one_of(st.none(), st.lists(SAFE_TEXT, max_size=4).map(tuple)), NONEMPTY_TEXT)
+def test_in_context_searches_each_context_text(
+    context: tuple[str, ...] | None, needle: str
+):
+    rule = make_rule(InContextPredicate(pattern=re.escape(needle)))
+    expected = context is not None and any(needle in text for text in context)
+    assert compile_rule(rule)(Env({}, context=context)) is expected
 
 
 def _truncate_rule() -> Rule:

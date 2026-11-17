@@ -1,4 +1,4 @@
-"""Estimate current context length from a Claude Code transcript.
+"""Read context length and context text from a Claude Code transcript.
 
 The PreToolUse payload carries no token count, but assistant entries in the
 JSONL transcript hold a ``message.usage`` block. The last such block's token
@@ -8,14 +8,23 @@ Two caveats, both upstream: the transcript is written asynchronously and may
 lag the current turn, and it is empty on the first call. Either yields None —
 "unknown" — which a context-length comparison treats as False.
 
-The parsing core (context_length_from_entries) is pure; read_context_length
-is the best-effort I/O edge and never raises.
+The text in context is every string in the entries after the last
+compaction boundary, an entry of type ``system`` and subtype
+``compact_boundary``. The few messages a compaction preserves sit before the
+boundary, so they read as gone, which costs a rule at most one extra firing.
+
+A subagent's hook payload names the parent's transcript, so the subagent's own
+is found beside it by its ``agent_id``.
+
+The parsing cores are pure; read_entries is the best-effort I/O edge and never
+raises.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from pathlib import Path
 from typing import cast
 
 # Summed for "fullest occupancy": input plus both cache tiers, plus the output
@@ -78,10 +87,56 @@ def context_length_from_lines(lines: Iterable[str]) -> int | None:
     return context_length_from_entries(_parse_lines(lines))
 
 
-def read_context_length(path: str) -> int | None:
-    """Read a transcript file and estimate context length; None on any failure."""
+def _is_compact_boundary(entry: object) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    e = cast("dict[str, object]", entry)
+    return e.get("type") == "system" and e.get("subtype") == "compact_boundary"
+
+
+def since_compaction(entries: Sequence[object]) -> Sequence[object]:
+    """The entries after the last compaction boundary, or all when there is none."""
+    for i in range(len(entries) - 1, -1, -1):
+        if _is_compact_boundary(entries[i]):
+            return entries[i + 1 :]
+    return entries
+
+
+def _strings(value: object) -> Iterator[str]:
+    match value:
+        case str():
+            yield value
+        case dict():
+            for v in cast("dict[str, object]", value).values():
+                yield from _strings(v)
+        case list():
+            for v in cast("list[object]", value):
+                yield from _strings(v)
+        case _:
+            return
+
+
+def context_texts(entries: Sequence[object]) -> tuple[str, ...]:
+    """Every string in the entries since the last compaction."""
+    return tuple(s for e in since_compaction(entries) for s in _strings(e))
+
+
+def agent_transcript_path(transcript_path: str, agent_id: str | None) -> str:
+    """The transcript of the agent a hook payload names.
+
+    The main session's is ``transcript_path``. A subagent's is
+    ``subagents/agent-<agent_id>.jsonl`` in the directory named after it.
+    """
+    if agent_id is None:
+        return transcript_path
+    main = Path(transcript_path)
+    return str(main.with_suffix("") / "subagents" / f"agent-{agent_id}.jsonl")
+
+
+def read_entries(path: str) -> tuple[object, ...] | None:
+    """Parse a transcript file's entries; None when it cannot be read."""
     try:
         with open(path, encoding="utf-8") as f:
-            return context_length_from_lines(f)
+            return tuple(_parse_lines(f))
     except OSError:
         return None

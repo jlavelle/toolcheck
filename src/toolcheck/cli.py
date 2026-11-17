@@ -83,7 +83,12 @@ from toolcheck.state import (
     session_state_paths,
     state_path,
 )
-from toolcheck.transcript import read_context_length
+from toolcheck.transcript import (
+    agent_transcript_path,
+    context_length_from_entries,
+    context_texts,
+    read_entries,
+)
 
 
 def _as_str(x: object) -> str | None:
@@ -140,6 +145,7 @@ def evaluate_call(
     call_index: int | None = None,
     cwd: str | None = None,
     views: Views | None = None,
+    context: tuple[str, ...] | None = None,
 ) -> tuple[list[Rule], SessionState]:
     """Evaluate every rule for the tool against the input and prior state.
 
@@ -148,13 +154,14 @@ def evaluate_call(
     prior_call predicates read from history). Pure:
     no I/O, deterministic given its arguments. ``context_length`` is the
     current session context length in tokens, or None when unknown, and
-    ``cwd`` the agent's working directory, or None when unknown.
+    ``cwd`` the agent's working directory, and ``context`` the texts in the
+    agent's context since its last compaction, each None when unknown.
     ``call_index`` is the session's 1-based tool-call count; rules with
     ``every_calls`` need it to throttle, and fire unrestricted when it is None.
     """
     observed_fields = _observed_fields(tool_name, rules)
     rules = [r for r in rules if tool_name in r.tools]
-    env = Env(tool_input, context_length, state, cwd, tool_name, views or {})
+    env = Env(tool_input, context_length, state, cwd, tool_name, views or {}, context)
     fired: list[Rule] = []
     next_state = state
 
@@ -325,6 +332,7 @@ def _run_hook(
     tool_input: dict[str, object],
     context_length: int | None,
     cwd: str | None,
+    context: tuple[str, ...] | None = None,
 ) -> tuple[list[str], list[str], list[str], list[str]]:
     """Shared hook core: evaluate the call, persist state, render hints.
 
@@ -358,6 +366,7 @@ def _run_hook(
         call_index,
         cwd,
         views,
+        context,
     )
 
     notices: list[str] = []
@@ -384,15 +393,22 @@ def _check_claude(
     tool_input: dict[str, object],
 ) -> int:
     transcript_path = _as_str(payload.get("transcript_path"))
-    context_length = read_context_length(transcript_path) if transcript_path else None
+    entries = (
+        read_entries(
+            agent_transcript_path(transcript_path, _as_str(payload.get("agent_id")))
+        )
+        if transcript_path
+        else None
+    )
 
     warnings, errors, reminders, notices = _run_hook(
         payload,
         "claude-code",
         tool,
         tool_input,
-        context_length,
+        context_length_from_entries(entries) if entries is not None else None,
         _as_str(payload.get("cwd")),
+        context_texts(entries) if entries is not None else None,
     )
 
     output: dict[str, object] = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}

@@ -9,6 +9,7 @@ extractor (see toolcheck.compile):
   LengthPredicate    — compare a field's length to a constant
   ContextLengthPredicate — compare the session's current context length to a constant
   CwdPredicate       — regex search on the agent's working directory
+  InContextPredicate — regex search on the text in the agent's context
   AstPredicate       — ast-grep rule over a field parsed as source code
   CommandPredicate   — a simple command a bash field runs
   NotPredicate       — logical NOT
@@ -89,6 +90,17 @@ class CwdPredicate:
 
     Ambient like ContextLengthPredicate. The directory is unknown when the
     payload carries no ``cwd``, and a search of an unknown directory holds False.
+    """
+
+    pattern: str
+
+
+@dataclass(frozen=True)
+class InContextPredicate:
+    """Regex search on the text in the agent's context since its last compaction.
+
+    Ambient like ContextLengthPredicate. The text is unknown without a
+    transcript, and a search of unknown text holds False.
     """
 
     pattern: str
@@ -177,6 +189,7 @@ Predicate = (
     | LengthPredicate
     | ContextLengthPredicate
     | CwdPredicate
+    | InContextPredicate
     | AstPredicate
     | CommandPredicate
     | NotPredicate
@@ -230,6 +243,7 @@ _PREDICATE_KEYS: frozenset[str] = frozenset(
         "length",
         "context_length",
         "cwd",
+        "in_context",
         "ast",
         "command",
         "not",
@@ -329,6 +343,8 @@ def parse_predicate(d: object) -> Predicate:
         )
     if "cwd" in m:
         return CwdPredicate(pattern=_string(m["cwd"], "cwd"))
+    if "in_context" in m:
+        return InContextPredicate(pattern=_string(m["in_context"], "in_context"))
     if "ast" in m:
         return _ast_predicate(_mapping(m["ast"], "ast"))
     if "command" in m:
@@ -682,6 +698,7 @@ def _pred_has_cross_call(pred: Predicate) -> bool:
             | LengthPredicate()
             | ContextLengthPredicate()
             | CwdPredicate()
+            | InContextPredicate()
             | AstPredicate()
             | CommandPredicate()
             | PriorCallPredicate()
@@ -712,7 +729,12 @@ def predicate_fields(pred: Predicate) -> Iterator[str]:
         case AllPredicate(operands=ops) | AnyPredicate(operands=ops):
             for o in ops:
                 yield from predicate_fields(o)
-        case ContextLengthPredicate() | CwdPredicate() | PriorCallPredicate():
+        case (
+            ContextLengthPredicate()
+            | CwdPredicate()
+            | InContextPredicate()
+            | PriorCallPredicate()
+        ):
             return  # ambient, references no field of this rule's tool input
 
 
@@ -733,6 +755,7 @@ def prior_calls(pred: Predicate) -> Iterator[PriorCallPredicate]:
             | LengthPredicate()
             | ContextLengthPredicate()
             | CwdPredicate()
+            | InContextPredicate()
             | AstPredicate()
             | CommandPredicate()
             | CrossCallPredicate()

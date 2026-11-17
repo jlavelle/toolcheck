@@ -173,6 +173,7 @@ A predicate tests a `field` of the tool input. Compose them freely with `not`, `
 | context_length | `{ context_length = { op = ">", value = 120000 } }`               | the session's context length compares true (see below) |
 | prior_call | `{ prior_call = { tool = "Skill", field = "skill", value = "ghci" } }` | an earlier call by this agent to the tool had the value in the field (see below) |
 | cwd       | `{ cwd = '/work/' }`                                                   | the pattern matches the agent's working directory (see below) |
+| in_context | `{ in_context = '# Prose for people' }`                               | the pattern matches text in the agent's context since its last compaction (see below) |
 | ast       | `{ ast = { field = "command", language = "bash", rule = { … } } }`     | the ast-grep rule matches the field parsed as code (see below) |
 | command   | `{ command = { field = "command", name = "gh", args = ["pr", "create"] } }` | the field, read as bash, runs the command (see below) |
 | not       | `{ not = <predicate> }`                                                | the inner predicate fails                 |
@@ -191,7 +192,7 @@ The `length` predicate's `op` field accepts: `>`, `>=`, `<`, `<=`, `==`, `!=`.
 
 `context_length` compares the session's current context length, in tokens, against a constant with the same ops as `length`. Unlike the others it tests no field — the value is ambient, so it composes freely with `not`/`all`/`any` but takes no `field`.
 
-The PreToolUse payload carries no token count. `toolcheck` estimates it by summing the token counts (`input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`) in the last usage-bearing entry of the transcript named by `transcript_path`. Two consequences:
+The PreToolUse payload carries no token count. `toolcheck` estimates it by summing the token counts (`input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`) in the last usage-bearing entry of the agent's transcript. For the main session that is the file `transcript_path` names. A subagent's payload names its parent's transcript too, so for a payload with an `agent_id` toolcheck reads `subagents/agent-<agent_id>.jsonl` in the directory named after the parent's transcript. Two consequences:
 
 - The value is only available under `toolcheck check --claude`. Under plain `check` it is unknown.
 - It is unknown on the first call of a session, and the transcript is written asynchronously so it may lag the current turn by a message.
@@ -211,6 +212,31 @@ all = [
     { absent = "limit" },
 ]
 ```
+
+#### In context
+
+`in_context` searches the text in the agent's context with a regex, and holds when the pattern matches one of its strings. The text is every string in the agent's transcript after the last compaction, read as `context_length` reads it, so it covers a file the agent read, a command's output, and a hint or refusal toolcheck gave it earlier. Like `context_length` it reads no field of the call, so it composes freely with `not`/`all`/`any`.
+
+Its main use is a rule that refuses a call until the agent has seen a guide, and whose message is that guide. The rule stays quiet while the guide is in context and fires again once a compaction drops it, with no `dedup` and no `toolcheck reset`:
+
+```toml
+[[rule]]
+name         = "prose-for-people"
+tool         = "Bash"
+message_file = "~/.claude/references/prose-for-people.md"
+severity     = "error"
+[rule.match]
+all = [
+    { command = { field = "command", name = "git", args = ["commit"] } },
+    { not = { in_context = 'Cut words, not facts\. Brevity means' } },
+]
+```
+
+Match a sentence from the guide's body rather than its title. The Read tool prefixes each line with its number, and a refusal starts with the rule's name, so a pattern anchored at the start of a line misses both, and a title is easily quoted elsewhere.
+
+- A compaction keeps the last few messages before it in context, but `in_context` reads only what follows its boundary, so text that arrived just before a compaction counts as gone.
+- The transcript is written a moment after each message, so text from the last tool result may not be there yet.
+- Both cost at most one extra refusal. Under plain `check` and `--pi` there is no transcript, so `in_context` is `False` and `not { in_context = … }` holds.
 
 #### Prior calls
 

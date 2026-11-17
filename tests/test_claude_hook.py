@@ -305,3 +305,52 @@ def test_reset_keeps_cross_call_history(tmp_path: Path):
     )
     assert result.returncode == 0, result.stderr
     assert reread()
+
+
+_GUIDE_TOML = b"""
+[[rule]]
+name = "read-the-guide"
+tool = "Bash"
+message = "# The guide"
+severity = "error"
+
+[rule.match]
+not = { in_context = '# The guide' }
+"""
+
+
+def _entry(text: str) -> str:
+    return json.dumps({"type": "user", "message": {"role": "user", "content": text}})
+
+
+_BOUNDARY = json.dumps({"type": "system", "subtype": "compact_boundary"})
+
+
+def _refused(transcript: Path, agent_id: str | None = None) -> bool:
+    payload: dict[str, object] = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "git commit"},
+        "transcript_path": str(transcript),
+    }
+    if agent_id is not None:
+        payload["agent_id"] = agent_id
+    return _run_hook(_GUIDE_TOML, payload).get("permissionDecision") == "deny"
+
+
+def test_in_context_reads_the_transcript_since_the_last_compaction(tmp_path: Path):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(_entry("# The guide\n\nRules.") + "\n")
+    assert not _refused(transcript)
+    transcript.write_text(_entry("# The guide") + "\n" + _BOUNDARY + "\n")
+    assert _refused(transcript)
+
+
+def test_in_context_reads_a_subagents_own_transcript(tmp_path: Path):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(_entry("# The guide") + "\n")
+    own = tmp_path / "session" / "subagents" / "agent-a1.jsonl"
+    own.parent.mkdir(parents=True)
+    own.write_text(_entry("other work") + "\n")
+    assert _refused(transcript, agent_id="a1")
+    own.write_text(_entry("# The guide") + "\n")
+    assert not _refused(transcript, agent_id="a1")

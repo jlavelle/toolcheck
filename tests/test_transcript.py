@@ -8,8 +8,10 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from toolcheck.transcript import (
+    agent_transcript_path,
     context_length_from_entries,
     context_length_from_lines,
+    context_texts,
     usage_total,
 )
 
@@ -71,3 +73,35 @@ def test_usage_total_is_the_sum(i: int, cc: int, cr: int, o: int):
         "output_tokens": o,
     }
     assert usage_total(usage) == i + cc + cr + o
+
+
+_BOUNDARY = {"type": "system", "subtype": "compact_boundary"}
+
+
+def _user(text: str) -> dict[str, object]:
+    return {"type": "user", "message": {"role": "user", "content": [{"text": text}]}}
+
+
+@given(st.lists(st.text(max_size=8), max_size=4))
+def test_context_texts_without_a_boundary_hold_every_text(texts: list[str]):
+    context = context_texts([_user(t) for t in texts])
+    assert all(t in context for t in texts)
+
+
+@given(
+    st.lists(st.text(max_size=8).map(_user), max_size=4),
+    st.lists(st.text(max_size=8).map(_user), max_size=4),
+)
+def test_context_texts_start_after_the_last_boundary(
+    before: list[object], after: list[object]
+):
+    assert context_texts([*before, _BOUNDARY, *after]) == context_texts(after)
+    assert context_texts([_BOUNDARY, *before, _BOUNDARY, *after]) == context_texts(
+        after
+    )
+
+
+def test_agent_transcript_path():
+    main = "/p/-home/abc.jsonl"
+    assert agent_transcript_path(main, None) == main
+    assert agent_transcript_path(main, "a1") == "/p/-home/abc/subagents/agent-a1.jsonl"

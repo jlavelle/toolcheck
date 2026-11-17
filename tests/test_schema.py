@@ -18,6 +18,7 @@ from toolcheck.schema import (
     ContextLengthPredicate,
     CrossCallPredicate,
     CwdPredicate,
+    InContextPredicate,
     InPredicate,
     LengthPredicate,
     NotPredicate,
@@ -64,6 +65,8 @@ def pred_to_toml(p: Predicate) -> dict[str, object]:
             return {"context_length": {"op": op, "value": v}}
         case CwdPredicate(pattern=pat):
             return {"cwd": pat}
+        case InContextPredicate(pattern=pat):
+            return {"in_context": pat}
         case AstPredicate(field=f, query=q):
             optional = {"constraints": q.constraints, "utils": q.utils}
             return {

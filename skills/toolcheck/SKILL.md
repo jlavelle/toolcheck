@@ -9,7 +9,7 @@ description: >
   Agent, `mcp__*`); when a rule fires wrongly, never fires, or needs a
   tighter regex; or on any of `[rule.match]`, `severity`, `sample_field`,
   `dedup`, `every_calls`, `regex`, `present`, `absent`, `equals`, `in`, `length`,
-  `context_length`, `prior_call`, `cwd`, `ast`, `command`, `not`, `all`, `any`, `cross_call`,
+  `context_length`, `prior_call`, `cwd`, `in_context`, `ast`, `command`, `not`, `all`, `any`, `cross_call`,
   `@last_pipe_command`, `[[view]]`, `toolcheck check`, `toolcheck lint-rules`,
   `toolcheck list`, or `TOOLCHECK_NO_DEDUP`. Out of scope: changing
   toolcheck's own Python source or the pi extension.
@@ -75,6 +75,7 @@ Messages follow one shape: what was seen, an em-dash, the remedy. Lowercase star
 | context_length | `{ context_length = { op = ">", value = 120000 } }` | the session's token count compares true |
 | prior_call | `{ prior_call = { tool = "Skill", field = "skill", value = "ghci" } }` | an earlier call by this agent to that tool had the value in the field |
 | cwd | `{ cwd = '/work/' }` | `re.search` matches the agent's working directory |
+| in_context | `{ in_context = 'Cut words, not facts' }` | `re.search` matches a string in the agent's transcript since its last compaction |
 | ast | `{ ast = { field = "command", language = "bash", rule = { … } } }` | an ast-grep rule matches the field parsed as code (see below) |
 | command | `{ command = { field = "command", name = "gh", args = ["pr", "create"], with_arg = '…', without_arg = '…' } }` | the field, read as bash, runs that command, even under `sudo`, `env`, `nix develop -c` or `bash -c` (see below) |
 | not / all / any | `{ all = [ p, q ] }` | boolean combination |
@@ -111,6 +112,7 @@ These hold in the installed `toolcheck` and will not be reported by `lint-rules`
 - `context_length` is unknown under plain `check` and on the first call of a session, and a comparison against unknown is `False`. Under `--claude` it is estimated from the transcript and lags the current turn by about one message.
 - `prior_call` sees only calls the hook was run on. A rule that waits for a `Skill` call needs `Skill` in the PreToolUse hook's matcher. Its `field` is a raw input key, never an `@`-field. Plain `check` has no history, so there `not { prior_call = … }` always holds.
 - `cwd` comes from the payload's `cwd` and is `False` when the payload has none. It is the directory the call starts in, so it misses a `cd` inside the same command: match the command text for that.
+- `in_context` reads the transcript only under `--claude`, and is `False` elsewhere. The transcript lags by about one message, and text from just before a compaction counts as gone. Match a sentence from the text's body, unanchored, because Read output carries line numbers and a refusal starts with the rule's name.
 - `@last_pipe_command` is the basename of the first token of the rightmost `|` segment, with `VAR=x` prefixes stripped. `||` is not a pipe. It is the only builtin derived field; any other `@name` must be a view of one of the rule's tools, or lint fails.
 - Under pi, `path` is renamed to `file_path` before evaluation. pi's `edit` sends an `edits` list, not a single string, so toolcheck joins the `newText` values into a synthetic `new_string`; a rule on `new_string` fires under both agents. `old_string` is never synthesised, so rules on it never fire under pi. A `cross_call` on `field = "path"` never fires under pi either, and lint does not flag it. Target `file_path`.
 - Dedup makes a warning fire once per session (and `every_calls` throttles it to an interval), so a rule you are iterating on in a live session seems to stop working. Set `TOOLCHECK_NO_DEDUP=1` in the hook's environment while developing, or test with plain `check`.
@@ -129,6 +131,18 @@ severity = "error"
 all = [
     { regex = { field = "command", pattern = '(^|&&|;|\|)\s*(ghci|cabal repl|stack ghci)\b' } },
     { not = { prior_call = { tool = "Skill", field = "skill", value = "ghci" } } },
+]
+```
+
+## Requiring a guide before a call
+
+To make an agent read a guide before a call it covers, such as a commit message, write an `error` rule whose `message_file` is the guide and whose match refuses the call while the guide is not in context. The refusal itself puts the guide in context, so the retry goes through, and the rule fires again only after a compaction drops the guide. Prefer this to `dedup`, which cannot tell a guide the agent already read, and which needs `toolcheck reset` after a compaction.
+
+```toml
+[rule.match]
+all = [
+    { command = { field = "command", name = "git", args = ["commit"] } },
+    { not = { in_context = 'Cut words, not facts\. Brevity means' } },
 ]
 ```
 

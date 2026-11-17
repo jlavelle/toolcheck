@@ -4,9 +4,10 @@ Cross-call rules are excluded — callers filter with is_stateless() before
 compiling. Cross-call evaluation lives in toolcheck.crosscall.
 
 An ``Env`` bundles the tool_input with ambient session facts: the current
-context length, the agent's working directory and its state before this call.
-Field predicates read tool_input; the context-length, cwd and prior-call
-predicates read the ambient values.
+context length, the agent's working directory, the text in its context and
+its state before this call. Field predicates read tool_input; the
+context-length, cwd, in-context and prior-call predicates read the ambient
+values.
 
 A predicate's ``field`` is resolved by ``resolve_field``: an @-prefixed name
 is a derived field, either a builtin pure extractor or a view the
@@ -32,6 +33,7 @@ from toolcheck.schema import (
     ContextLengthPredicate,
     CrossCallPredicate,
     CwdPredicate,
+    InContextPredicate,
     InPredicate,
     LengthPredicate,
     NotPredicate,
@@ -56,6 +58,7 @@ class Env:
     cwd: str | None = None
     tool: str = ""
     views: Views = field(default_factory=dict[str, Mapping[str, View]])
+    context: tuple[str, ...] | None = None
 
 
 class ViewCycleError(ValueError):
@@ -267,6 +270,13 @@ def _compile_predicate(pred: Predicate) -> Matcher:
         case CwdPredicate(pattern=p):
             compiled = re.compile(p)
             return lambda env: env.cwd is not None and bool(compiled.search(env.cwd))
+
+        case InContextPredicate(pattern=p):
+            compiled = re.compile(p)
+            return lambda env: (
+                env.context is not None
+                and any(compiled.search(text) for text in env.context)
+            )
 
         case AstPredicate():
             return _compile_ast(pred)
