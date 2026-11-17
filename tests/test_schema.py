@@ -63,10 +63,10 @@ def pred_to_toml(p: Predicate) -> dict[str, object]:
             return {"context_length": {"op": op, "value": v}}
         case CwdPredicate(pattern=pat):
             return {"cwd": pat}
-        case AstPredicate(field=f, language=lang, rule=r, constraints=c, utils=u):
-            optional = {"constraints": c, "utils": u}
+        case AstPredicate(field=f, query=q):
+            optional = {"constraints": q.constraints, "utils": q.utils}
             return {
-                "ast": {"field": f, "language": lang, "rule": r}
+                "ast": {"field": f, "language": q.language, "rule": q.rule}
                 | {k: v for k, v in optional.items() if v is not None}
             }
         case NotPredicate(operand=o):
@@ -172,7 +172,7 @@ def test_catalogue_memoised(rules_env: RulesEnv):
 def test_every_rule_well_formed(rules_env: RulesEnv):
     rules_env(TOML_BYTES)
     for r in load_catalogue():
-        assert r.name and r.tool and r.message
+        assert r.name and r.tools and r.message
         assert r.severity in ("warning", "error", "reminder")
 
 
@@ -295,29 +295,36 @@ regex = { field = "command", pattern = 'x' }
     assert "every_calls" in catalogue.errors[0].message
 
 
-def test_sample_field_defaults_per_tool():
+def test_tool_takes_one_name_or_a_list():
     toml = b"""
 [[rule]]
-name = "bash-rule"
+name = "one"
 tool = "Bash"
 message = "m"
-severity = "warning"
-
 [rule.match]
-regex = { field = "command", pattern = 'x' }
+present = "command"
 
 [[rule]]
-name = "unknown-tool-rule"
-tool = "Nonesuch"
+name = "two"
+tool = ["Bash", "mcp__x__run"]
 message = "m"
-severity = "warning"
-
 [rule.match]
-regex = { field = "command", pattern = 'x' }
+present = "command"
+
+[[rule]]
+name = "none"
+tool = []
+message = "m"
+[rule.match]
+present = "command"
 """
-    rules = {r.name: r for r in parse_rules(toml, Path("x.toml")).rules}
-    assert rules["bash-rule"].sample_field == "command"
-    assert rules["unknown-tool-rule"].sample_field is None
+    catalogue = parse_rules(toml, Path("x.toml"))
+    assert {r.name: r.tools for r in catalogue.rules} == {
+        "one": ("Bash",),
+        "two": ("Bash", "mcp__x__run"),
+    }
+    assert len(catalogue.errors) == 1
+    assert "none" in catalogue.errors[0].message
 
 
 def test_enabled_defaults_true():

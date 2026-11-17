@@ -9,19 +9,19 @@ Field predicates read tool_input; the context-length, cwd and prior-call
 predicates read the ambient values.
 
 A predicate's ``field`` is resolved by ``resolve_field``: an @-prefixed name
-is a derived field (a pure extractor in ``_DERIVED``); any other name is a raw
-tool_input key.
+is a derived field, either a builtin pure extractor or a view the
+catalogue declares for the calling tool; any other name is a raw tool_input
+key. A view yields ``Values``, and a field predicate on them holds when it
+holds for one of them.
 """
 
 from __future__ import annotations
 
-import functools
 import json
 import operator
 import re
 from collections.abc import Callable, Mapping, Sized
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
 
 from toolcheck import bash as _bash
 from toolcheck.schema import (
@@ -39,11 +39,10 @@ from toolcheck.schema import (
     PriorCallPredicate,
     RegexPredicate,
     Rule,
+    View,
+    Views,
 )
 from toolcheck.state import SessionState
-
-if TYPE_CHECKING:
-    from ast_grep_py import Config, SgNode
 
 
 @dataclass(frozen=True)
@@ -54,6 +53,19 @@ class Env:
     context_length: int | None = None
     state: SessionState = field(default_factory=SessionState)
     cwd: str | None = None
+    tool: str = ""
+    views: Views = field(default_factory=dict[str, Mapping[str, View]])
+
+
+class ViewCycleError(ValueError):
+    """A view that reads itself, directly or through other views."""
+
+
+@dataclass(frozen=True)
+class Values:
+    """The strings a view yields."""
+
+    items: tuple[str, ...]
 
 
 Matcher = Callable[["Env"], bool]
@@ -75,17 +87,45 @@ def known_derived_fields() -> frozenset[str]:
     return frozenset(_DERIVED)
 
 
-def resolve_field(field: str, inp: Mapping[str, object]) -> object | None:
-    """A field's value: derived extractor for @-names, raw key otherwise.
+def resolve_field(field: str, env: Env) -> object | None:
+    """A field's value: derived extractor or view for @-names, raw key otherwise.
 
-    Raises ValueError for an unknown derived field.
+    A view the calling tool lacks resolves to None. Raises ValueError for an
+    @-name that is neither a builtin nor a view of some tool.
     """
-    if field.startswith("@"):
-        extractor = _DERIVED.get(field)
-        if extractor is None:
-            raise ValueError(f"unknown derived field: {field!r}")
-        return extractor(inp)
-    return inp.get(field)
+    return _resolve(field, env, frozenset())
+
+
+def _resolve(field: str, env: Env, seen: frozenset[str]) -> object | None:
+    if not field.startswith("@"):
+        return env.tool_input.get(field)
+    if (extractor := _DERIVED.get(field)) is not None:
+        return extractor(env.tool_input)
+    view = env.views.get(env.tool, {}).get(field)
+    if view is None:
+        if any(field in named for named in env.views.values()):
+            return None
+        raise ValueError(f"unknown derived field: {field!r}")
+    if field in seen:
+        raise ViewCycleError(f"view {field!r} reads itself")
+    source = _resolve(view.field, env, seen | {field})
+    texts = (
+        source.items
+        if isinstance(source, Values)
+        else (() if source is None else (field_text(source),))
+    )
+    if view.query is None:
+        return Values(texts)
+    from toolcheck import syntax
+
+    return Values(tuple(s for t in texts for s in syntax.extract(view.query, t)))
+
+
+def _some(value: object | None, test: Callable[[object | None], bool]) -> bool:
+    """``test`` on a field's value, or on some item when the value is a view's Values."""
+    if isinstance(value, Values):
+        return any(test(item) for item in value.items)
+    return test(value)
 
 
 def field_text(value: object) -> str:
@@ -115,40 +155,15 @@ _OPS: dict[str, Callable[[int, int], bool]] = {
 }
 
 
-@functools.lru_cache(maxsize=32)
-def _parse(text: str, language: str) -> SgNode:
-    """The syntax tree of ``text``, shared by every ast rule that reads the same field."""
-    from ast_grep_py import SgRoot
-
-    return SgRoot(text, language).root()
-
-
-def _ast_config(pred: AstPredicate) -> Config:
-    config: dict[str, object] = {"rule": pred.rule}
-    if pred.constraints is not None:
-        config["constraints"] = pred.constraints
-    if pred.utils is not None:
-        config["utils"] = pred.utils
-    return cast("Config", config)
-
-
 def _compile_ast(pred: AstPredicate) -> Matcher:
     """Raises ValueError for an unknown language or a rule ast-grep rejects."""
-    config = _ast_config(pred)
-    try:
-        _parse("", pred.language).find(config)
-    except BaseException as e:
-        # ast-grep raises Exception for a bad rule and panics, which pyo3
-        # surfaces as a BaseException, for an unknown language.
-        if not isinstance(e, Exception) and type(e).__name__ != "PanicException":
-            raise
-        raise ValueError(f"ast rule for {pred.language!r} does not compile: {e}") from e
+    from toolcheck import syntax
 
-    def _ast(env: Env) -> bool:
-        text = field_text(resolve_field(pred.field, env.tool_input))
-        return _parse(text, pred.language).find(config) is not None
-
-    return _ast
+    syntax.check(pred.query)
+    return lambda env: _some(
+        resolve_field(pred.field, env),
+        lambda v: syntax.matches(pred.query, field_text(v)),
+    )
 
 
 def _compile_predicate(pred: Predicate) -> Matcher:
@@ -161,14 +176,22 @@ def _compile_predicate(pred: Predicate) -> Matcher:
                 _c: re.Pattern[str] = compiled,
                 _f: str = f,
             ) -> bool:
-                return bool(_c.search(field_text(resolve_field(_f, env.tool_input))))
+                return _some(
+                    resolve_field(_f, env), lambda v: bool(_c.search(field_text(v)))
+                )
 
             return _regex
 
         case PresencePredicate(field=f, present=want):
 
             def _present(env: Env, _f: str = f, _want: bool = want) -> bool:
-                return (resolve_field(_f, env.tool_input) is not None) == _want
+                value = resolve_field(_f, env)
+                present = (
+                    bool(value.items)
+                    if isinstance(value, Values)
+                    else value is not None
+                )
+                return present == _want
 
             return _present
 
@@ -180,8 +203,10 @@ def _compile_predicate(pred: Predicate) -> Matcher:
                 _f: str = f,
                 _members: frozenset[str] = members,
             ) -> bool:
-                val = resolve_field(_f, env.tool_input)
-                return val is not None and field_text(val) in _members
+                return _some(
+                    resolve_field(_f, env),
+                    lambda v: v is not None and field_text(v) in _members,
+                )
 
             return _in
 
@@ -194,7 +219,9 @@ def _compile_predicate(pred: Predicate) -> Matcher:
                 _v: int = v,
                 _cmp: Callable[[int, int], bool] = cmp,
             ) -> bool:
-                return _cmp(field_length(resolve_field(_f, env.tool_input)), _v)
+                return _some(
+                    resolve_field(_f, env), lambda v: _cmp(field_length(v), _v)
+                )
 
             return _length
 

@@ -10,14 +10,14 @@ description: >
   tighter regex; or on any of `[rule.match]`, `severity`, `sample_field`,
   `dedup`, `every_calls`, `regex`, `present`, `absent`, `equals`, `in`, `length`,
   `context_length`, `prior_call`, `cwd`, `ast`, `not`, `all`, `any`, `cross_call`,
-  `@last_pipe_command`, `toolcheck check`, `toolcheck lint-rules`,
+  `@last_pipe_command`, `[[view]]`, `toolcheck check`, `toolcheck lint-rules`,
   `toolcheck list`, or `TOOLCHECK_NO_DEDUP`. Out of scope: changing
   toolcheck's own Python source or the pi extension.
 ---
 
 # Writing toolcheck rules
 
-A rule names one tool, one message, and one predicate over the call's `tool_input`. When the predicate holds, `warning` and `reminder` rules inject the message into the model's context and `error` rules deny the call. The hook reads the rule directory on every call, so a saved file is live at once. There is no reload step.
+A rule names a tool or a list of tools, one message, and one predicate over the call's `tool_input`. When the predicate holds, `warning` and `reminder` rules inject the message into the model's context and `error` rules deny the call. The hook reads the rule directory on every call, so a saved file is live at once. There is no reload step.
 
 ## Workflow
 
@@ -96,6 +96,10 @@ A Bash `command` is usually compound: `cd x && cat f`, `a; b`, `a | b`. A patter
 
 Prefer `ast` to `regex` for a Bash rule that must not fire on quoted text or heredoc bodies, such as an `error` rule. The README's "Syntax trees" section has a worked `rg … | wc -l` rule. Match a command as `kind = "command"` with `has = { field = "name", regex = '^rg$' }` and its arguments as `has = { kind = "word", regex = … }`. Between piped commands, `follows` and `precedes` must step through the `|` token or set `stopBy = "end"`. Test a rule with plain `check` on the command, a quoted copy of it and a heredoc that contains it.
 
+## Several tools
+
+To cover one action in several tools, such as a command run through Bash or through an MCP tool that runs code, list the tools in `tool` and match a `[[view]]` field that each tool declares, such as `@shell`. The README's "Views" section shows a view that pulls the shell commands out of TypeScript ``sh`…` `` and `exec("…")` calls. `toolcheck lint-rules` reports a view no tool of the rule declares. Read the rules directory for views already declared before adding one.
+
 ## Gotchas
 
 These hold in the installed `toolcheck` and will not be reported by `lint-rules`.
@@ -106,7 +110,7 @@ These hold in the installed `toolcheck` and will not be reported by `lint-rules`
 - `context_length` is unknown under plain `check` and on the first call of a session, and a comparison against unknown is `False`. Under `--claude` it is estimated from the transcript and lags the current turn by about one message.
 - `prior_call` sees only calls the hook was run on. A rule that waits for a `Skill` call needs `Skill` in the PreToolUse hook's matcher. Its `field` is a raw input key, never an `@`-field. Plain `check` has no history, so there `not { prior_call = … }` always holds.
 - `cwd` comes from the payload's `cwd` and is `False` when the payload has none. It is the directory the call starts in, so it misses a `cd` inside the same command: match the command text for that.
-- `@last_pipe_command` is the basename of the first token of the rightmost `|` segment, with `VAR=x` prefixes stripped. `||` is not a pipe. It is the only derived field; any other `@name` fails lint.
+- `@last_pipe_command` is the basename of the first token of the rightmost `|` segment, with `VAR=x` prefixes stripped. `||` is not a pipe. It is the only builtin derived field; any other `@name` must be a view of one of the rule's tools, or lint fails.
 - Under pi, `path` is renamed to `file_path` before evaluation. pi's `edit` sends an `edits` list, not a single string, so toolcheck joins the `newText` values into a synthetic `new_string`; a rule on `new_string` fires under both agents. `old_string` is never synthesised, so rules on it never fire under pi. A `cross_call` on `field = "path"` never fires under pi either, and lint does not flag it. Target `file_path`.
 - Dedup makes a warning fire once per session (and `every_calls` throttles it to an interval), so a rule you are iterating on in a live session seems to stop working. Set `TOOLCHECK_NO_DEDUP=1` in the hook's environment while developing, or test with plain `check`.
 

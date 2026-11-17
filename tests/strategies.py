@@ -8,6 +8,7 @@ from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
     AstPredicate,
+    AstQuery,
     ContextLengthPredicate,
     CrossCallPredicate,
     CwdPredicate,
@@ -74,10 +75,13 @@ def _leaf_predicates() -> st.SearchStrategy[Predicate]:
     ast = st.builds(
         AstPredicate,
         field=NONEMPTY_TEXT,
-        language=NONEMPTY_TEXT,
-        rule=ast_rules,
-        constraints=st.none() | ast_rules,
-        utils=st.none() | ast_rules,
+        query=st.builds(
+            AstQuery,
+            language=NONEMPTY_TEXT,
+            rule=ast_rules,
+            constraints=st.none() | ast_rules,
+            utils=st.none() | ast_rules,
+        ),
     )
     return st.one_of(
         regex, presence, value, length, context_length, cwd, ast, cross, prior
@@ -128,11 +132,13 @@ def _bash_leaves() -> st.SearchStrategy[Predicate]:
     )
     ast = st.sampled_from(
         [
-            AstPredicate("command", "bash", {"kind": "pipeline"}),
+            AstPredicate("command", AstQuery("bash", {"kind": "pipeline"})),
             AstPredicate(
                 "command",
-                "bash",
-                {"kind": "command", "has": {"field": "name", "regex": "^rg$"}},
+                AstQuery(
+                    "bash",
+                    {"kind": "command", "has": {"field": "name", "regex": "^rg$"}},
+                ),
             ),
         ]
     )
@@ -177,7 +183,7 @@ def make_rule(
 ) -> Rule:
     return Rule(
         name=name,
-        tool=tool,
+        tools=(tool,),
         message="m",
         severity="warning",
         dedup=dedup,

@@ -7,6 +7,7 @@ from hypothesis import strategies as st
 
 from strategies import make_rule
 from toolcheck.cli import evaluate_call, render
+from toolcheck.compile import Env
 from toolcheck.schema import (
     AllPredicate,
     CrossCallPredicate,
@@ -155,11 +156,13 @@ def _render_rule() -> Rule:
 
 
 def test_render_two_line_with_sample():
-    assert render(_render_rule(), {"command": "x | y"}) == "[r] m\n> x | y"
+    assert render(_render_rule(), Env({"command": "x | y"}, tool="Bash")) == (
+        "[r] m\n> x | y"
+    )
 
 
 def test_render_one_line_without_sample():
-    assert render(_render_rule(), {}) == "[r] m"
+    assert render(_render_rule(), Env({}, tool="Bash")) == "[r] m"
 
 
 def test_render_derived_sample_field():
@@ -168,7 +171,8 @@ def test_render_derived_sample_field():
         name="r",
         sample_field="@last_pipe_command",
     )
-    assert render(rule, {"command": "rg foo | head"}) == "[r] m\n> head"
+    env = Env({"command": "rg foo | head"}, tool="Bash")
+    assert render(rule, env) == "[r] m\n> head"
 
 
 @given(

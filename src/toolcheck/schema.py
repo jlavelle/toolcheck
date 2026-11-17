@@ -21,7 +21,7 @@ from __future__ import annotations
 import functools
 import os
 import tomllib
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -94,18 +94,40 @@ class CwdPredicate:
 
 
 @dataclass(frozen=True)
-class AstPredicate:
-    """An ast-grep rule matches somewhere in a field parsed as ``language``.
+class AstQuery:
+    """An ast-grep rule config over source in ``language``.
 
     ``rule``, ``constraints`` and ``utils`` are the keys of an ast-grep rule
     config, kept as the plain data the TOML gave.
     """
 
-    field: str
     language: str
     rule: dict[str, object]
     constraints: dict[str, object] | None = None
     utils: dict[str, object] | None = None
+
+
+@dataclass(frozen=True)
+class AstPredicate:
+    """The query matches somewhere in the field parsed as its language."""
+
+    field: str
+    query: AstQuery
+
+
+@dataclass(frozen=True)
+class View:
+    """A derived field ``name`` that rules on ``tool`` can read.
+
+    Its value is the list of strings that ``field`` yields: the field itself,
+    or, with a query, each node the query matches in it, string literals read
+    as their contents.
+    """
+
+    name: str
+    tool: str
+    field: str
+    query: AstQuery | None = None
 
 
 CrossCallKind = Literal["duplicate_field_within_session", "adjacent_near_identical"]
@@ -151,13 +173,13 @@ Predicate = (
 @dataclass(frozen=True)
 class Rule:
     name: str
-    tool: str  # "Bash", "Read", "Edit", "Grep", "mcp__*", …
+    tools: tuple[str, ...]  # "Bash", "Read", "Edit", "Grep", "mcp__*", …
     message: str  # diagnosis + remedy, from `message` or the file `message_file` names
     severity: Literal["warning", "error", "reminder"]
     dedup: bool  # True: fire at most once per (session, rule); False: fire every match
     sample_field: (
         str | None
-    )  # field shown as the sample line in hint output; None: no sample
+    )  # field shown as the sample line in hint output; None: the calling tool's default
     match: Predicate
     every_calls: int | None = (
         None  # throttle: at most once per N session tool calls; supersedes dedup
@@ -165,7 +187,7 @@ class Rule:
     enabled: bool = True  # False: rule is skipped entirely
 
 
-_DEFAULT_SAMPLE: dict[str, str] = {
+DEFAULT_SAMPLE: dict[str, str] = {
     "Bash": "command",
     "Read": "file_path",
     "Edit": "file_path",
@@ -324,23 +346,62 @@ def _optional_mapping(x: object, ctx: str) -> dict[str, object] | None:
     return None if x is None else _mapping(x, ctx)
 
 
-def _ast_predicate(a: dict[str, object]) -> AstPredicate:
-    unknown = set(a) - {"field", "language", "rule", "constraints", "utils"}
+def _unknown_keys(d: dict[str, object], known: set[str], ctx: str) -> None:
+    unknown = set(d) - known
     if unknown:
-        raise ValueError(f"unknown ast keys: {sorted(unknown)!r}")
-    return AstPredicate(
-        field=_string(a["field"], "ast.field"),
-        language=_string(a["language"], "ast.language"),
-        rule=_mapping(a["rule"], "ast.rule"),
-        constraints=_optional_mapping(a.get("constraints"), "ast.constraints"),
-        utils=_optional_mapping(a.get("utils"), "ast.utils"),
+        raise ValueError(f"unknown {ctx} keys: {sorted(unknown)!r}")
+
+
+_QUERY_KEYS = {"language", "rule", "constraints", "utils"}
+
+
+def _ast_query(a: dict[str, object], ctx: str) -> AstQuery:
+    return AstQuery(
+        language=_string(a["language"], f"{ctx}.language"),
+        rule=_mapping(a["rule"], f"{ctx}.rule"),
+        constraints=_optional_mapping(a.get("constraints"), f"{ctx}.constraints"),
+        utils=_optional_mapping(a.get("utils"), f"{ctx}.utils"),
     )
 
 
+def _ast_predicate(a: dict[str, object]) -> AstPredicate:
+    _unknown_keys(a, {"field"} | _QUERY_KEYS, "ast")
+    return AstPredicate(
+        field=_string(a["field"], "ast.field"), query=_ast_query(a, "ast")
+    )
+
+
+def _view(d: dict[str, object]) -> View:
+    _unknown_keys(d, {"name", "tool", "field"} | _QUERY_KEYS, "view")
+    name = _string(d["name"], "view.name")
+    if not name.startswith("@"):
+        raise ValueError(f"view name must start with '@', got {name!r}")
+    query = _ast_query(d, "view") if "language" in d or "rule" in d else None
+    if query is not None:
+        from toolcheck import syntax
+
+        syntax.check(query)
+    return View(
+        name=name,
+        tool=_string(d["tool"], "view.tool"),
+        field=_string(d["field"], "view.field"),
+        query=query,
+    )
+
+
+def _tools(x: object) -> tuple[str, ...]:
+    if isinstance(x, str):
+        return (x,)
+    tools = tuple(_string(t, "tool[]") for t in _seq(x, "tool"))
+    if not tools:
+        raise ValueError("tool must name at least one tool")
+    return tools
+
+
 def _parse_rule(d: dict[str, object], rules_dir: Path) -> Rule:
-    tool = _string(d["tool"], "tool")
+    tools = _tools(d["tool"])
     severity = _severity(d.get("severity"))
-    sample_raw = d.get("sample_field", _DEFAULT_SAMPLE.get(tool))
+    sample_raw = d.get("sample_field")
     sample_field = None if sample_raw is None else _string(sample_raw, "sample_field")
     dedup_raw = d.get("dedup")
     if dedup_raw is None:
@@ -367,7 +428,7 @@ def _parse_rule(d: dict[str, object], rules_dir: Path) -> Rule:
 
     return Rule(
         name=_string(d["name"], "name"),
-        tool=tool,
+        tools=tools,
         message=_message(d, rules_dir),
         severity=severity,
         enabled=enabled,
@@ -403,15 +464,18 @@ class LoadError:
 
 @dataclass(frozen=True)
 class Catalogue:
-    """Rules that parsed plus the problems met along the way, in load order."""
+    """Rules and views that parsed plus the problems met along the way, in load order."""
 
     rules: tuple[Rule, ...]
     errors: tuple[LoadError, ...]
+    views: tuple[View, ...] = ()
 
 
-def _rule_label(index: int, raw: object) -> str:
+def _item_label(kind: str, index: int, raw: object) -> str:
     name = cast("dict[str, object]", raw).get("name") if isinstance(raw, dict) else None
-    return f"rule[{index}] ({name!r})" if isinstance(name, str) else f"rule[{index}]"
+    return (
+        f"{kind}[{index}] ({name!r})" if isinstance(name, str) else f"{kind}[{index}]"
+    )
 
 
 def _problem(e: Exception) -> str:
@@ -427,16 +491,27 @@ def parse_rules(data: bytes, path: Path) -> Catalogue:
     try:
         parsed = tomllib.loads(data.decode("utf-8"))
         raws = _seq(parsed.get("rule", []), "rule")
+        raw_views = _seq(parsed.get("view", []), "view")
     except (ValueError, TypeError, KeyError) as e:
         return Catalogue((), (LoadError(path, _problem(e)),))
     rules: list[Rule] = []
+    views: list[View] = []
     errors: list[LoadError] = []
     for i, raw in enumerate(raws):
         try:
             rules.append(_parse_rule(_mapping(raw, "rule"), path.parent))
         except (ValueError, TypeError, KeyError) as e:
-            errors.append(LoadError(path, f"{_rule_label(i, raw)}: {_problem(e)}"))
-    return Catalogue(tuple(rules), tuple(errors))
+            errors.append(
+                LoadError(path, f"{_item_label('rule', i, raw)}: {_problem(e)}")
+            )
+    for i, raw in enumerate(raw_views):
+        try:
+            views.append(_view(_mapping(raw, "view")))
+        except (ValueError, TypeError, KeyError) as e:
+            errors.append(
+                LoadError(path, f"{_item_label('view', i, raw)}: {_problem(e)}")
+            )
+    return Catalogue(tuple(rules), tuple(errors), tuple(views))
 
 
 def _rules_dirs() -> list[Path]:
@@ -467,6 +542,7 @@ def _load_all_rules() -> Catalogue:
     load. Memoised; call cache_clear() to invalidate.
     """
     rules: list[Rule] = []
+    views: list[View] = []
     errors: list[LoadError] = []
     for root in _rules_dirs():
         if not root.is_dir():
@@ -482,8 +558,9 @@ def _load_all_rules() -> Catalogue:
                 errors.append(LoadError(path, str(e)))
                 continue
             rules.extend(parsed.rules)
+            views.extend(parsed.views)
             errors.extend(parsed.errors)
-    return Catalogue(tuple(rules), tuple(errors))
+    return Catalogue(tuple(rules), tuple(errors), tuple(views))
 
 
 def _dedup_last_wins(rules: Iterable[Rule]) -> list[Rule]:
@@ -500,6 +577,29 @@ def load_catalogue() -> list[Rule]:
     return [r for r in _dedup_last_wins(_load_all_rules().rules) if r.enabled]
 
 
+Views = Mapping[str, Mapping[str, View]]
+"""Views by tool, then by name."""
+
+
+def views_by_tool(views: Iterable[View]) -> dict[str, dict[str, View]]:
+    """Index views by tool and name, a later view replacing an earlier one."""
+    index: dict[str, dict[str, View]] = {}
+    for view in views:
+        index.setdefault(view.tool, {})[view.name] = view
+    return index
+
+
+@functools.cache
+def load_views() -> Views:
+    """Views from every rules file, last-wins per tool and name. Memoised with the catalogue."""
+    return views_by_tool(_load_all_rules().views)
+
+
+def load_all_views() -> Sequence[View]:
+    """All views in load order, for linting. Memoised with the catalogue."""
+    return _load_all_rules().views
+
+
 def load_errors() -> Sequence[LoadError]:
     """Files and rules that failed to parse on the last load. Memoised via _load_all_rules."""
     return _load_all_rules().errors
@@ -513,6 +613,7 @@ def load_all_rules() -> Sequence[Rule]:
 def clear_rule_cache() -> None:
     """Invalidate the memoised catalogue (e.g. after changing TOOLCHECK_RULES_DIR)."""
     _load_all_rules.cache_clear()
+    load_views.cache_clear()
 
 
 def _pred_has_cross_call(pred: Predicate) -> bool:

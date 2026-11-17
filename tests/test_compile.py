@@ -22,6 +22,7 @@ from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
     AstPredicate,
+    AstQuery,
     ContextLengthPredicate,
     CwdPredicate,
     InPredicate,
@@ -124,7 +125,7 @@ def test_cwd_searches_the_working_directory(cwd: str | None, needle: str):
 def _truncate_rule() -> Rule:
     return Rule(
         name="truncate-without-tee",
-        tool="Bash",
+        tools=("Bash",),
         message="msg",
         severity="warning",
         dedup=True,
@@ -143,7 +144,7 @@ def _grep_unscoped_rule() -> Rule:
 
     return Rule(
         name="grep-unscoped",
-        tool="Grep",
+        tools=("Grep",),
         message="msg",
         severity="warning",
         dedup=True,
@@ -236,7 +237,8 @@ def test_in_matches_booleans_as_json_text():
 
 
 _RG_COMMAND = AstPredicate(
-    "command", "bash", {"kind": "command", "has": {"field": "name", "regex": "^rg$"}}
+    "command",
+    AstQuery("bash", {"kind": "command", "has": {"field": "name", "regex": "^rg$"}}),
 )
 
 
@@ -255,24 +257,29 @@ def test_ast_matches_commands_not_quoted_text(cmd: str, expected: bool):
 def test_ast_passes_utils_and_constraints_to_ast_grep():
     pred = AstPredicate(
         "command",
-        "bash",
-        {"matches": "named-cmd"},
-        constraints={"N": {"regex": "^wc$"}},
-        utils={
-            "named-cmd": {"kind": "command", "has": {"pattern": "$N", "field": "name"}}
-        },
+        AstQuery(
+            "bash",
+            {"matches": "named-cmd"},
+            constraints={"N": {"regex": "^wc$"}},
+            utils={
+                "named-cmd": {
+                    "kind": "command",
+                    "has": {"pattern": "$N", "field": "name"},
+                }
+            },
+        ),
     )
     assert _run(pred, {"command": "rg foo | wc -l"})
     assert not _run(pred, {"command": "rg foo | sort"})
 
 
 @pytest.mark.parametrize(
-    "pred",
+    "query",
     [
-        AstPredicate("command", "klingon", {"kind": "command"}),
-        AstPredicate("command", "bash", {"kind": "no_such_kind"}),
+        AstQuery("klingon", {"kind": "command"}),
+        AstQuery("bash", {"kind": "no_such_kind"}),
     ],
 )
-def test_ast_rejects_unknown_language_and_kind_at_compile(pred: AstPredicate):
+def test_ast_rejects_unknown_language_and_kind_at_compile(query: AstQuery):
     with pytest.raises(ValueError):
-        compile_rule(make_rule(pred))
+        compile_rule(make_rule(AstPredicate("command", query)))
