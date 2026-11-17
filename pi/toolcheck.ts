@@ -105,6 +105,7 @@ export default function (pi: ExtensionAPI) {
       tool_input: event.input ?? {},
       session_id: ctx.sessionManager.getSessionId(),
       context_length: ctx.getContextUsage()?.tokens ?? null,
+      cwd: ctx.cwd,
     };
 
     const outcome = await check(JSON.stringify(payload));

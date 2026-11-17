@@ -8,6 +8,7 @@ extractor (see toolcheck.compile):
   InPredicate        — a field's value is one of a fixed set (equals = singleton)
   LengthPredicate    — compare a field's length to a constant
   ContextLengthPredicate — compare the session's current context length to a constant
+  CwdPredicate       — regex search on the agent's working directory
   NotPredicate       — logical NOT
   AllPredicate       — logical AND
   AnyPredicate       — logical OR
@@ -80,6 +81,17 @@ class ContextLengthPredicate:
     value: int
 
 
+@dataclass(frozen=True)
+class CwdPredicate:
+    """Regex search on the agent's working directory.
+
+    Ambient like ContextLengthPredicate. The directory is unknown when the
+    payload carries no ``cwd``, and a search of an unknown directory holds False.
+    """
+
+    pattern: str
+
+
 CrossCallKind = Literal["duplicate_field_within_session", "adjacent_near_identical"]
 
 
@@ -110,6 +122,7 @@ Predicate = (
     | InPredicate
     | LengthPredicate
     | ContextLengthPredicate
+    | CwdPredicate
     | NotPredicate
     | AllPredicate
     | AnyPredicate
@@ -160,6 +173,7 @@ _PREDICATE_KEYS: frozenset[str] = frozenset(
         "in",
         "length",
         "context_length",
+        "cwd",
         "not",
         "all",
         "any",
@@ -255,6 +269,8 @@ def parse_predicate(d: object) -> Predicate:
             op=_length_op(cl["op"], "context_length.op"),
             value=_integer(cl["value"], "context_length.value"),
         )
+    if "cwd" in m:
+        return CwdPredicate(pattern=_string(m["cwd"], "cwd"))
     if "not" in m:
         return NotPredicate(operand=parse_predicate(m["not"]))
     if "all" in m:
@@ -476,6 +492,7 @@ def _pred_has_cross_call(pred: Predicate) -> bool:
             | InPredicate()
             | LengthPredicate()
             | ContextLengthPredicate()
+            | CwdPredicate()
             | PriorCallPredicate()
         ):
             return False
@@ -502,7 +519,7 @@ def predicate_fields(pred: Predicate) -> Iterator[str]:
         case AllPredicate(operands=ops) | AnyPredicate(operands=ops):
             for o in ops:
                 yield from predicate_fields(o)
-        case ContextLengthPredicate() | PriorCallPredicate():
+        case ContextLengthPredicate() | CwdPredicate() | PriorCallPredicate():
             return  # ambient, references no field of this rule's tool input
 
 
@@ -522,6 +539,7 @@ def prior_calls(pred: Predicate) -> Iterator[PriorCallPredicate]:
             | InPredicate()
             | LengthPredicate()
             | ContextLengthPredicate()
+            | CwdPredicate()
             | CrossCallPredicate()
         ):
             return

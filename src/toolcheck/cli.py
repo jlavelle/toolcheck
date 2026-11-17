@@ -128,6 +128,7 @@ def evaluate_call(
     rules: list[Rule],
     context_length: int | None = None,
     call_index: int | None = None,
+    cwd: str | None = None,
 ) -> tuple[list[Rule], SessionState]:
     """Evaluate every rule for the tool against the input and prior state.
 
@@ -135,13 +136,14 @@ def evaluate_call(
     stateless rules, plus observations of the fields that cross_call and
     prior_call predicates read from history). Pure:
     no I/O, deterministic given its arguments. ``context_length`` is the
-    current session context length in tokens, or None when unknown.
+    current session context length in tokens, or None when unknown, and
+    ``cwd`` the agent's working directory, or None when unknown.
     ``call_index`` is the session's 1-based tool-call count; rules with
     ``every_calls`` need it to throttle, and fire unrestricted when it is None.
     """
     observed_fields = _observed_fields(tool_name, rules)
     rules = [r for r in rules if r.tool == tool_name]
-    env = Env(tool_input, context_length, state)
+    env = Env(tool_input, context_length, state, cwd)
     fired: list[Rule] = []
     next_state = state
 
@@ -281,6 +283,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
         use_dedup=False,
         now="",
         rules=load_catalogue(),
+        cwd=_as_str(payload.get("cwd")),
     )
 
     if args.json:
@@ -305,6 +308,7 @@ def _run_hook(
     tool: str,
     tool_input: dict[str, object],
     context_length: int | None,
+    cwd: str | None,
 ) -> tuple[list[str], list[str], list[str], list[str]]:
     """Shared hook core: evaluate the call, persist state, render hints.
 
@@ -335,6 +339,7 @@ def _run_hook(
         load_catalogue(),
         context_length,
         call_index,
+        cwd,
     )
 
     notices: list[str] = []
@@ -363,7 +368,12 @@ def _check_claude(
     context_length = read_context_length(transcript_path) if transcript_path else None
 
     warnings, errors, reminders, notices = _run_hook(
-        payload, "claude-code", tool, tool_input, context_length
+        payload,
+        "claude-code",
+        tool,
+        tool_input,
+        context_length,
+        _as_str(payload.get("cwd")),
     )
 
     output: dict[str, object] = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
@@ -396,9 +406,14 @@ def _check_pi(
         print("error: 'context_length' must be an integer", file=sys.stderr)
         return 2
 
+    cwd = payload.get("cwd")
+    if cwd is not None and not isinstance(cwd, str):
+        print("error: 'cwd' must be a string", file=sys.stderr)
+        return 2
+
     tool, tool_input = normalise(tool, tool_input)
     warnings, errors, reminders, notices = _run_hook(
-        payload, "pi", tool, tool_input, context_length
+        payload, "pi", tool, tool_input, context_length, cwd
     )
 
     print(

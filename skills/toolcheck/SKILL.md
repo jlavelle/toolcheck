@@ -9,7 +9,7 @@ description: >
   Agent, `mcp__*`); when a rule fires wrongly, never fires, or needs a
   tighter regex; or on any of `[rule.match]`, `severity`, `sample_field`,
   `dedup`, `every_calls`, `regex`, `present`, `absent`, `equals`, `in`, `length`,
-  `context_length`, `prior_call`, `not`, `all`, `any`, `cross_call`,
+  `context_length`, `prior_call`, `cwd`, `not`, `all`, `any`, `cross_call`,
   `@last_pipe_command`, `toolcheck check`, `toolcheck lint-rules`,
   `toolcheck list`, or `TOOLCHECK_NO_DEDUP`. Out of scope: changing
   toolcheck's own Python source or the pi extension.
@@ -74,6 +74,7 @@ Messages follow one shape: what was seen, an em-dash, the remedy. Lowercase star
 | length | `{ length = { field = "content", op = ">", value = 1500 } }` | characters of a string, or items of a list or object, compare true |
 | context_length | `{ context_length = { op = ">", value = 120000 } }` | the session's token count compares true |
 | prior_call | `{ prior_call = { tool = "Skill", field = "skill", value = "ghci" } }` | an earlier call by this agent to that tool had the value in the field |
+| cwd | `{ cwd = '/work/' }` | `re.search` matches the agent's working directory |
 | not / all / any | `{ all = [ p, q ] }` | boolean combination |
 | cross_call | `{ cross_call = { kind = "duplicate_field_within_session", field = "file_path" } }` | seen earlier this session (see below) |
 
@@ -99,6 +100,7 @@ These hold in the installed `toolcheck` and will not be reported by `lint-rules`
 - `cross_call` must be the whole `match`. You cannot combine it with a `regex` to say "duplicate Read of a `.hs` file". `lint-rules` rejects nesting.
 - `context_length` is unknown under plain `check` and on the first call of a session, and a comparison against unknown is `False`. Under `--claude` it is estimated from the transcript and lags the current turn by about one message.
 - `prior_call` sees only calls the hook was run on. A rule that waits for a `Skill` call needs `Skill` in the PreToolUse hook's matcher. Its `field` is a raw input key, never an `@`-field. Plain `check` has no history, so there `not { prior_call = … }` always holds.
+- `cwd` comes from the payload's `cwd` and is `False` when the payload has none. It is the directory the call starts in, so it misses a `cd` inside the same command: match the command text for that.
 - `@last_pipe_command` is the basename of the first token of the rightmost `|` segment, with `VAR=x` prefixes stripped. `||` is not a pipe. It is the only derived field; any other `@name` fails lint.
 - Under pi, `path` is renamed to `file_path` before evaluation. pi's `edit` sends an `edits` list, not a single string, so toolcheck joins the `newText` values into a synthetic `new_string`; a rule on `new_string` fires under both agents. `old_string` is never synthesised, so rules on it never fire under pi. A `cross_call` on `field = "path"` never fires under pi either, and lint does not flag it. Target `file_path`.
 - Dedup makes a warning fire once per session (and `every_calls` throttles it to an interval), so a rule you are iterating on in a live session seems to stop working. Set `TOOLCHECK_NO_DEDUP=1` in the hook's environment while developing, or test with plain `check`.

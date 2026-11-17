@@ -149,6 +149,26 @@ context_length = { op = ">", value = 1000 }
     assert unknown["warnings"] == []
 
 
+def test_cwd_payload_drives_predicate():
+    cwd_toml = b"""
+[[rule]]
+name = "work-dir"
+tool = "Read"
+message = "in a work checkout"
+severity = "warning"
+
+[rule.match]
+cwd = '/work/'
+"""
+    base: dict[str, object] = {"tool_name": "read", "tool_input": {"path": "/x.py"}}
+    inside = _run_hook(cwd_toml, {**base, "cwd": "/home/u/work/penguin"})
+    outside = _run_hook(cwd_toml, {**base, "cwd": "/home/u/repos/toolcheck"})
+    unknown = _run_hook(cwd_toml, base)
+    assert cast("list[str]", inside["warnings"])
+    assert outside["warnings"] == []
+    assert unknown["warnings"] == []
+
+
 def test_cross_call_fires_after_field_mapping(tmp_path: Path):
     crosscall_toml = b"""
 [[rule]]

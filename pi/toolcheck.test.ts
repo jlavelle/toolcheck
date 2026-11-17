@@ -60,6 +60,7 @@ const fire = async (
 const mkCtx = () => ({
   sessionManager: { getSessionId: () => "test-session" },
   getContextUsage: () => ({ tokens: 42 }),
+  cwd: "/test",
   ui: { notify: () => undefined },
 });
 

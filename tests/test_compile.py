@@ -3,17 +3,26 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from strategies import bash_predicates, bash_tool_inputs, context_lengths, make_rule
+from strategies import (
+    NONEMPTY_TEXT,
+    SAFE_TEXT,
+    bash_predicates,
+    bash_tool_inputs,
+    context_lengths,
+    make_rule,
+)
 from toolcheck.compile import Env, compile_rule, field_length, field_text
 from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
     ContextLengthPredicate,
+    CwdPredicate,
     InPredicate,
     NotPredicate,
     Predicate,
@@ -102,6 +111,13 @@ def test_context_length_composes_with_field_predicate():
     assert matcher(Env({"command": "foo"}, 50_000)) is False  # under threshold
     assert matcher(Env({"command": "bar"}, 120_000)) is False  # command mismatch
     assert matcher(Env({"command": "foo"}, None)) is False  # unknown context
+
+
+@given(st.one_of(st.none(), SAFE_TEXT), NONEMPTY_TEXT)
+def test_cwd_searches_the_working_directory(cwd: str | None, needle: str):
+    rule = make_rule(CwdPredicate(pattern=re.escape(needle)))
+    expected = cwd is not None and needle in cwd
+    assert compile_rule(rule)(Env({}, cwd=cwd)) is expected
 
 
 def _truncate_rule() -> Rule:

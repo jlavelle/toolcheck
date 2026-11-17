@@ -67,7 +67,7 @@ Calls a tool makes through `ctx.executeTool()`, such as those a `codemode` scrip
 
 ### Envelope contract
 
-Input (stdin): `{"tool_name": "read", "tool_input": {…}, "session_id": "…", "context_length": 12345}` — `session_id` and `context_length` optional; `context_length` must be an integer when present. Output (stdout, always exit 0):
+Input (stdin): `{"tool_name": "read", "tool_input": {…}, "session_id": "…", "context_length": 12345, "cwd": "/home/me/project"}` — `session_id`, `context_length` and `cwd` optional; `context_length` must be an integer and `cwd` a string when present. Output (stdout, always exit 0):
 
 ```json
 {
@@ -172,6 +172,7 @@ A predicate tests a `field` of the tool input. Compose them freely with `not`, `
 | length    | `{ length = { field = "content", op = ">", value = 1500 } }`           | the field's length (characters of a string, items of a list or object) compares true |
 | context_length | `{ context_length = { op = ">", value = 120000 } }`               | the session's context length compares true (see below) |
 | prior_call | `{ prior_call = { tool = "Skill", field = "skill", value = "ghci" } }` | an earlier call by this agent to the tool had the value in the field (see below) |
+| cwd       | `{ cwd = '/work/' }`                                                   | the pattern matches the agent's working directory (see below) |
 | not       | `{ not = <predicate> }`                                                | the inner predicate fails                 |
 | all       | `{ all = [ <predicate>, … ] }`                                         | every operand holds                       |
 | any       | `{ any = [ <predicate>, … ] }`                                         | some operand holds                        |
@@ -230,6 +231,25 @@ all = [
 - `field` is a raw key of the named tool's input; derived `@`-fields are not recorded.
 - History is per agent: a subagent starts with none, like its hints. `toolcheck reset` keeps it.
 - Plain `check` has no history, so `prior_call` is `False` there and `not { prior_call = … }` holds.
+
+#### Working directory
+
+`cwd` searches the agent's working directory with a regex. Like `context_length` it reads no field of the call, so it composes freely with `not`/`all`/`any`. It catches commands whose text never names the directory they act on, such as `git worktree add ../x` run from inside a checkout:
+
+```toml
+[[rule]]
+name     = "worktree-in-work"
+tool     = "Bash"
+message  = "create worktrees here with story-workspace"
+severity = "error"
+[rule.match]
+all = [
+    { cwd = '/work/' },
+    { regex = { field = "command", pattern = '\bgit\s+worktree\s+add\b' } },
+]
+```
+
+The directory comes from the payload's `cwd`, which Claude Code's PreToolUse payload and the pi extension both send. A plain `check` reads it from its input too. A search of an unknown directory holds `False`, so `not { cwd = … }` holds when the payload carries none.
 
 ### Regex engine
 
