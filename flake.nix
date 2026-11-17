@@ -33,6 +33,7 @@
             ];
           };
           build-system = [ pkgs.python3Packages.hatchling ];
+          dependencies = [ pkgs.python3Packages.ast-grep-py ];
           nativeCheckInputs = [
             pkgs.python3Packages.pytestCheckHook
             pkgs.python3Packages.hypothesis

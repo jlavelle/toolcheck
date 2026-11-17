@@ -3,7 +3,7 @@ name = "toolcheck"
 version = "0.1.0"
 description = "TOML-driven linter for LLM tool calls — a declarative rule catalogue, a predicate compiler, and a CLI with a Claude PreToolUse hook mode."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["ast-grep-py>=0.51,<0.52"]
 
 [project.scripts]
 toolcheck = "toolcheck.cli:main"

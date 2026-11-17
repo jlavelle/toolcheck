@@ -13,6 +13,7 @@ from toolcheck.compile import compile_rule
 from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
+    AstPredicate,
     ContextLengthPredicate,
     CrossCallPredicate,
     CwdPredicate,
@@ -62,6 +63,12 @@ def pred_to_toml(p: Predicate) -> dict[str, object]:
             return {"context_length": {"op": op, "value": v}}
         case CwdPredicate(pattern=pat):
             return {"cwd": pat}
+        case AstPredicate(field=f, language=lang, rule=r, constraints=c, utils=u):
+            optional = {"constraints": c, "utils": u}
+            return {
+                "ast": {"field": f, "language": lang, "rule": r}
+                | {k: v for k, v in optional.items() if v is not None}
+            }
         case NotPredicate(operand=o):
             return {"not": pred_to_toml(o)}
         case AllPredicate(operands=ops):
@@ -87,6 +94,13 @@ def test_parse_rejects_multiple_keys():
 def test_parse_rejects_unknown_key():
     with pytest.raises(ValueError):
         parse_predicate({"regexp": {"field": "command", "pattern": "x"}})
+
+
+def test_parse_rejects_unknown_ast_key():
+    with pytest.raises(ValueError):
+        parse_predicate(
+            {"ast": {"field": "command", "language": "bash", "rule": {}, "fix": "x"}}
+        )
 
 
 def test_parse_rejects_unknown_cross_call_kind():

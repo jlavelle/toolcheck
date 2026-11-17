@@ -111,7 +111,7 @@ def _eval_stateless(rule: Rule, env: Env) -> bool:
     """Compile and run a single stateless rule; False when it cannot compile or resolve a field."""
     try:
         matcher = compile_rule(rule)
-    except (re.error, NotImplementedError):
+    except (re.error, ValueError, NotImplementedError):
         return False
     try:
         return matcher(env)
@@ -437,7 +437,7 @@ def lint_rule(rule: Rule) -> list[str]:
     elif is_stateless(rule):
         try:
             compile_rule(rule)
-        except re.error as e:
+        except (re.error, ValueError) as e:
             issues.append(f"does not compile: {e}")
     if cross_call_of(rule) is not None and rule.every_calls is not None:
         issues.append(

@@ -173,6 +173,7 @@ A predicate tests a `field` of the tool input. Compose them freely with `not`, `
 | context_length | `{ context_length = { op = ">", value = 120000 } }`               | the session's context length compares true (see below) |
 | prior_call | `{ prior_call = { tool = "Skill", field = "skill", value = "ghci" } }` | an earlier call by this agent to the tool had the value in the field (see below) |
 | cwd       | `{ cwd = '/work/' }`                                                   | the pattern matches the agent's working directory (see below) |
+| ast       | `{ ast = { field = "command", language = "bash", rule = { … } } }`     | the ast-grep rule matches the field parsed as code (see below) |
 | not       | `{ not = <predicate> }`                                                | the inner predicate fails                 |
 | all       | `{ all = [ <predicate>, … ] }`                                         | every operand holds                       |
 | any       | `{ any = [ <predicate>, … ] }`                                         | some operand holds                        |
@@ -250,6 +251,32 @@ all = [
 ```
 
 The directory comes from the payload's `cwd`, which Claude Code's PreToolUse payload and the pi extension both send. A plain `check` reads it from its input too. A search of an unknown directory holds `False`, so `not { cwd = … }` holds when the payload carries none.
+
+#### Syntax trees
+
+`ast` parses a field as source code with [ast-grep](https://ast-grep.github.io/) and holds when its rule matches any node. `rule`, and the optional `constraints` and `utils`, are an [ast-grep rule config](https://ast-grep.github.io/reference/rule.html) written as TOML tables. `language` is any language ast-grep supports, such as `bash`, `typescript`, `python` or `haskell`.
+
+Unlike `regex`, a rule over the syntax tree tells a command from the same text inside a quoted string, a heredoc or a comment. This `rg … | wc -l` rule matches `FOO=1 rg foo | wc -l` and `cd x && rg a |& wc -l`, and skips `printf 'rg a | wc -l'`, `rg a | sort | wc -l` and `wc -c`:
+
+```toml
+[[rule]]
+name    = "rg-pipe-wc"
+tool    = "Bash"
+message = "`rg ... | wc -l` — use `rg -c` (or `--count-matches`)"
+[rule.match.ast]
+field    = "command"
+language = "bash"
+[rule.match.ast.rule]
+kind    = "command"
+has     = { kind = "word", regex = '^-l$' }
+all     = [{ has = { field = "name", regex = '^wc$' } }]
+follows = { regex = '^\|&?$', follows = { kind = "command", has = { field = "name", regex = '^rg$' } } }
+```
+
+- `precedes` and `follows` look only at the adjacent node unless `stopBy = "end"`, and the node next to a piped command is the `|` token, so step through it as above.
+- Bash patterns such as `rg $$$ | wc -l` miss commands with an environment prefix. Match `kind = "command"` with a `has` on its `name` instead.
+- `lint-rules` reports an unknown language or node kind. A `pattern` that does not parse matches nothing, and lint cannot tell.
+- The ast-grep playground and the `ast-grep` CLI show the tree a command parses to.
 
 ### Regex engine
 

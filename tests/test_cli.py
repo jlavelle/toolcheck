@@ -200,6 +200,25 @@ regex = { field = "command", pattern = '(' }
     assert "does not compile" in err
 
 
+def test_lint_rules_reports_bad_ast_rule(
+    rules_env: RulesEnv, capsys: pytest.CaptureFixture[str]
+):
+    rules_env(b"""
+[[rule]]
+name = "bad-ast"
+tool = "Bash"
+message = "m"
+severity = "warning"
+
+[rule.match]
+ast = { field = "command", language = "bash", rule = { kind = "comand" } }
+""")
+    assert _run(["lint-rules"]) == 1
+    err = capsys.readouterr().err
+    assert "bad-ast" in err
+    assert "does not compile" in err
+
+
 def test_lint_rules_reports_unknown_derived_field(
     rules_env: RulesEnv, capsys: pytest.CaptureFixture[str]
 ):

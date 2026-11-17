@@ -9,6 +9,7 @@ extractor (see toolcheck.compile):
   LengthPredicate    — compare a field's length to a constant
   ContextLengthPredicate — compare the session's current context length to a constant
   CwdPredicate       — regex search on the agent's working directory
+  AstPredicate       — ast-grep rule over a field parsed as source code
   NotPredicate       — logical NOT
   AllPredicate       — logical AND
   AnyPredicate       — logical OR
@@ -92,6 +93,21 @@ class CwdPredicate:
     pattern: str
 
 
+@dataclass(frozen=True)
+class AstPredicate:
+    """An ast-grep rule matches somewhere in a field parsed as ``language``.
+
+    ``rule``, ``constraints`` and ``utils`` are the keys of an ast-grep rule
+    config, kept as the plain data the TOML gave.
+    """
+
+    field: str
+    language: str
+    rule: dict[str, object]
+    constraints: dict[str, object] | None = None
+    utils: dict[str, object] | None = None
+
+
 CrossCallKind = Literal["duplicate_field_within_session", "adjacent_near_identical"]
 
 
@@ -123,6 +139,7 @@ Predicate = (
     | LengthPredicate
     | ContextLengthPredicate
     | CwdPredicate
+    | AstPredicate
     | NotPredicate
     | AllPredicate
     | AnyPredicate
@@ -174,6 +191,7 @@ _PREDICATE_KEYS: frozenset[str] = frozenset(
         "length",
         "context_length",
         "cwd",
+        "ast",
         "not",
         "all",
         "any",
@@ -271,6 +289,8 @@ def parse_predicate(d: object) -> Predicate:
         )
     if "cwd" in m:
         return CwdPredicate(pattern=_string(m["cwd"], "cwd"))
+    if "ast" in m:
+        return _ast_predicate(_mapping(m["ast"], "ast"))
     if "not" in m:
         return NotPredicate(operand=parse_predicate(m["not"]))
     if "all" in m:
@@ -297,6 +317,23 @@ def parse_predicate(d: object) -> Predicate:
     return CrossCallPredicate(
         kind=cast("CrossCallKind", kind),
         field=_string(cc["field"], "cross_call.field"),
+    )
+
+
+def _optional_mapping(x: object, ctx: str) -> dict[str, object] | None:
+    return None if x is None else _mapping(x, ctx)
+
+
+def _ast_predicate(a: dict[str, object]) -> AstPredicate:
+    unknown = set(a) - {"field", "language", "rule", "constraints", "utils"}
+    if unknown:
+        raise ValueError(f"unknown ast keys: {sorted(unknown)!r}")
+    return AstPredicate(
+        field=_string(a["field"], "ast.field"),
+        language=_string(a["language"], "ast.language"),
+        rule=_mapping(a["rule"], "ast.rule"),
+        constraints=_optional_mapping(a.get("constraints"), "ast.constraints"),
+        utils=_optional_mapping(a.get("utils"), "ast.utils"),
     )
 
 
@@ -493,6 +530,7 @@ def _pred_has_cross_call(pred: Predicate) -> bool:
             | LengthPredicate()
             | ContextLengthPredicate()
             | CwdPredicate()
+            | AstPredicate()
             | PriorCallPredicate()
         ):
             return False
@@ -511,6 +549,7 @@ def predicate_fields(pred: Predicate) -> Iterator[str]:
             | PresencePredicate(field=f)
             | InPredicate(field=f)
             | LengthPredicate(field=f)
+            | AstPredicate(field=f)
             | CrossCallPredicate(field=f)
         ):
             yield f
@@ -540,6 +579,7 @@ def prior_calls(pred: Predicate) -> Iterator[PriorCallPredicate]:
             | LengthPredicate()
             | ContextLengthPredicate()
             | CwdPredicate()
+            | AstPredicate()
             | CrossCallPredicate()
         ):
             return

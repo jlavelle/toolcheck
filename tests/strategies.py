@@ -7,6 +7,7 @@ from hypothesis import strategies as st
 from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
+    AstPredicate,
     ContextLengthPredicate,
     CrossCallPredicate,
     CwdPredicate,
@@ -69,7 +70,18 @@ def _leaf_predicates() -> st.SearchStrategy[Predicate]:
         PriorCallPredicate, tool=NONEMPTY_TEXT, field=NONEMPTY_TEXT, value=NONEMPTY_TEXT
     )
     cwd = st.builds(CwdPredicate, pattern=SAFE_TEXT)
-    return st.one_of(regex, presence, value, length, context_length, cwd, cross, prior)
+    ast_rules = st.dictionaries(NONEMPTY_TEXT, SAFE_TEXT, max_size=2)
+    ast = st.builds(
+        AstPredicate,
+        field=NONEMPTY_TEXT,
+        language=NONEMPTY_TEXT,
+        rule=ast_rules,
+        constraints=st.none() | ast_rules,
+        utils=st.none() | ast_rules,
+    )
+    return st.one_of(
+        regex, presence, value, length, context_length, cwd, ast, cross, prior
+    )
 
 
 def predicates() -> st.SearchStrategy[Predicate]:
@@ -114,7 +126,17 @@ def _bash_leaves() -> st.SearchStrategy[Predicate]:
         op=st.sampled_from(LENGTH_OPS),
         value=st.integers(min_value=0, max_value=200_000),
     )
-    return st.one_of(regex, presence, value, length, context_length)
+    ast = st.sampled_from(
+        [
+            AstPredicate("command", "bash", {"kind": "pipeline"}),
+            AstPredicate(
+                "command",
+                "bash",
+                {"kind": "command", "has": {"field": "name", "regex": "^rg$"}},
+            ),
+        ]
+    )
+    return st.one_of(regex, presence, value, length, context_length, ast)
 
 
 def bash_predicates() -> st.SearchStrategy[Predicate]:

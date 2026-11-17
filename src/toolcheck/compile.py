@@ -15,16 +15,19 @@ tool_input key.
 
 from __future__ import annotations
 
+import functools
 import json
 import operator
 import re
 from collections.abc import Callable, Mapping, Sized
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, cast
 
 from toolcheck import bash as _bash
 from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
+    AstPredicate,
     ContextLengthPredicate,
     CrossCallPredicate,
     CwdPredicate,
@@ -38,6 +41,9 @@ from toolcheck.schema import (
     Rule,
 )
 from toolcheck.state import SessionState
+
+if TYPE_CHECKING:
+    from ast_grep_py import Config, SgNode
 
 
 @dataclass(frozen=True)
@@ -109,6 +115,42 @@ _OPS: dict[str, Callable[[int, int], bool]] = {
 }
 
 
+@functools.lru_cache(maxsize=32)
+def _parse(text: str, language: str) -> SgNode:
+    """The syntax tree of ``text``, shared by every ast rule that reads the same field."""
+    from ast_grep_py import SgRoot
+
+    return SgRoot(text, language).root()
+
+
+def _ast_config(pred: AstPredicate) -> Config:
+    config: dict[str, object] = {"rule": pred.rule}
+    if pred.constraints is not None:
+        config["constraints"] = pred.constraints
+    if pred.utils is not None:
+        config["utils"] = pred.utils
+    return cast("Config", config)
+
+
+def _compile_ast(pred: AstPredicate) -> Matcher:
+    """Raises ValueError for an unknown language or a rule ast-grep rejects."""
+    config = _ast_config(pred)
+    try:
+        _parse("", pred.language).find(config)
+    except BaseException as e:
+        # ast-grep raises Exception for a bad rule and panics, which pyo3
+        # surfaces as a BaseException, for an unknown language.
+        if not isinstance(e, Exception) and type(e).__name__ != "PanicException":
+            raise
+        raise ValueError(f"ast rule for {pred.language!r} does not compile: {e}") from e
+
+    def _ast(env: Env) -> bool:
+        text = field_text(resolve_field(pred.field, env.tool_input))
+        return _parse(text, pred.language).find(config) is not None
+
+    return _ast
+
+
 def _compile_predicate(pred: Predicate) -> Matcher:
     match pred:
         case RegexPredicate(field=f, pattern=p):
@@ -172,6 +214,9 @@ def _compile_predicate(pred: Predicate) -> Matcher:
         case CwdPredicate(pattern=p):
             compiled = re.compile(p)
             return lambda env: env.cwd is not None and bool(compiled.search(env.cwd))
+
+        case AstPredicate():
+            return _compile_ast(pred)
 
         case PriorCallPredicate(tool=t, field=f, value=v):
             return lambda env: v in env.state.history(t, f)

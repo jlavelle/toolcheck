@@ -21,6 +21,7 @@ from toolcheck.compile import Env, compile_rule, field_length, field_text
 from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
+    AstPredicate,
     ContextLengthPredicate,
     CwdPredicate,
     InPredicate,
@@ -232,3 +233,46 @@ def test_in_matches_booleans_as_json_text():
     assert compile_rule(rule)(Env({"replace_all": True})) is True
     pythonic = make_rule(InPredicate(field="replace_all", values=("True",)))
     assert compile_rule(pythonic)(Env({"replace_all": True})) is False
+
+
+_RG_COMMAND = AstPredicate(
+    "command", "bash", {"kind": "command", "has": {"field": "name", "regex": "^rg$"}}
+)
+
+
+@pytest.mark.parametrize(
+    ("cmd", "expected"),
+    [
+        ("cd src && FOO=1 rg foo | wc -l", True),
+        ("printf 'rg foo | wc -l'", False),
+        ("cat <<'EOF'\nrg foo\nEOF", False),
+    ],
+)
+def test_ast_matches_commands_not_quoted_text(cmd: str, expected: bool):
+    assert _run(_RG_COMMAND, {"command": cmd}) is expected
+
+
+def test_ast_passes_utils_and_constraints_to_ast_grep():
+    pred = AstPredicate(
+        "command",
+        "bash",
+        {"matches": "named-cmd"},
+        constraints={"N": {"regex": "^wc$"}},
+        utils={
+            "named-cmd": {"kind": "command", "has": {"pattern": "$N", "field": "name"}}
+        },
+    )
+    assert _run(pred, {"command": "rg foo | wc -l"})
+    assert not _run(pred, {"command": "rg foo | sort"})
+
+
+@pytest.mark.parametrize(
+    "pred",
+    [
+        AstPredicate("command", "klingon", {"kind": "command"}),
+        AstPredicate("command", "bash", {"kind": "no_such_kind"}),
+    ],
+)
+def test_ast_rejects_unknown_language_and_kind_at_compile(pred: AstPredicate):
+    with pytest.raises(ValueError):
+        compile_rule(make_rule(pred))

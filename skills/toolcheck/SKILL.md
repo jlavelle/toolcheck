@@ -9,7 +9,7 @@ description: >
   Agent, `mcp__*`); when a rule fires wrongly, never fires, or needs a
   tighter regex; or on any of `[rule.match]`, `severity`, `sample_field`,
   `dedup`, `every_calls`, `regex`, `present`, `absent`, `equals`, `in`, `length`,
-  `context_length`, `prior_call`, `cwd`, `not`, `all`, `any`, `cross_call`,
+  `context_length`, `prior_call`, `cwd`, `ast`, `not`, `all`, `any`, `cross_call`,
   `@last_pipe_command`, `toolcheck check`, `toolcheck lint-rules`,
   `toolcheck list`, or `TOOLCHECK_NO_DEDUP`. Out of scope: changing
   toolcheck's own Python source or the pi extension.
@@ -75,6 +75,7 @@ Messages follow one shape: what was seen, an em-dash, the remedy. Lowercase star
 | context_length | `{ context_length = { op = ">", value = 120000 } }` | the session's token count compares true |
 | prior_call | `{ prior_call = { tool = "Skill", field = "skill", value = "ghci" } }` | an earlier call by this agent to that tool had the value in the field |
 | cwd | `{ cwd = '/work/' }` | `re.search` matches the agent's working directory |
+| ast | `{ ast = { field = "command", language = "bash", rule = { … } } }` | an ast-grep rule matches the field parsed as code (see below) |
 | not / all / any | `{ all = [ p, q ] }` | boolean combination |
 | cross_call | `{ cross_call = { kind = "duplicate_field_within_session", field = "file_path" } }` | seen earlier this session (see below) |
 
@@ -91,11 +92,15 @@ A Bash `command` is usually compound: `cd x && cat f`, `a; b`, `a | b`. A patter
 
 `(?i)` at the start makes a pattern case-insensitive.
 
+## Syntax trees
+
+Prefer `ast` to `regex` for a Bash rule that must not fire on quoted text or heredoc bodies, such as an `error` rule. The README's "Syntax trees" section has a worked `rg … | wc -l` rule. Match a command as `kind = "command"` with `has = { field = "name", regex = '^rg$' }` and its arguments as `has = { kind = "word", regex = … }`. Between piped commands, `follows` and `precedes` must step through the `|` token or set `stopBy = "end"`. Test a rule with plain `check` on the command, a quoted copy of it and a heredoc that contains it.
+
 ## Gotchas
 
 These hold in the installed `toolcheck` and will not be reported by `lint-rules`.
 
-- A Bash `command` is the whole string, heredoc bodies and quoted text included. A rule on `curl … | sh` fires when an agent writes a file whose contents mention it. Error rules on Bash deny such writes outright, so keep their patterns narrow, or accept the false positive and tell the user to use the Write tool.
+- A `regex` on a Bash `command` sees the whole string, heredoc bodies and quoted text included. A rule on `curl … | sh` fires when an agent writes a file whose contents mention it. Use `ast` for such rules.
 - `regex` on a missing field matches against the empty string. So `{ not = { regex = … } }` holds whenever the field is absent. Wrap it: `all = [ { present = "f" }, { not = { regex = … } } ]`.
 - `cross_call` must be the whole `match`. You cannot combine it with a `regex` to say "duplicate Read of a `.hs` file". `lint-rules` rejects nesting.
 - `context_length` is unknown under plain `check` and on the first call of a session, and a comparison against unknown is `False`. Under `--claude` it is estimated from the transcript and lags the current turn by about one message.
