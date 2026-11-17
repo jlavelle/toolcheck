@@ -174,6 +174,7 @@ A predicate tests a `field` of the tool input. Compose them freely with `not`, `
 | prior_call | `{ prior_call = { tool = "Skill", field = "skill", value = "ghci" } }` | an earlier call by this agent to the tool had the value in the field (see below) |
 | cwd       | `{ cwd = '/work/' }`                                                   | the pattern matches the agent's working directory (see below) |
 | ast       | `{ ast = { field = "command", language = "bash", rule = { … } } }`     | the ast-grep rule matches the field parsed as code (see below) |
+| command   | `{ command = { field = "command", name = "gh", args = ["pr", "create"] } }` | the field, read as bash, runs the command (see below) |
 | not       | `{ not = <predicate> }`                                                | the inner predicate fails                 |
 | all       | `{ all = [ <predicate>, … ] }`                                         | every operand holds                       |
 | any       | `{ any = [ <predicate>, … ] }`                                         | some operand holds                        |
@@ -277,6 +278,25 @@ follows = { regex = '^\|&?$', follows = { kind = "command", has = { field = "nam
 - Bash patterns such as `rg $$$ | wc -l` miss commands with an environment prefix. Match `kind = "command"` with a `has` on its `name` instead.
 - `lint-rules` reports an unknown language or node kind. A `pattern` that does not parse matches nothing, and lint cannot tell.
 - The ast-grep playground and the `ast-grep` CLI show the tree a command parses to.
+
+#### Commands
+
+`command` reads a field as a bash script and holds when one of the simple commands it runs matches:
+
+```toml
+[rule.match.command]
+field       = "command"
+name        = "git"              # or a list, such as ["gh", "hub"]; matched against the program's basename
+args        = ["commit"]         # optional: these appear in order among the arguments that do not start with "-"
+with_arg    = '^(-[a-z]*m|--message|-F|--file)'   # optional: some argument matches
+without_arg = '^--no-edit$'      # optional: no argument matches
+```
+
+It matches `git commit -am x`, `cd repo && FOO=1 /usr/bin/git -C . commit -m x` and `sudo git commit -m x`, and skips `echo 'git commit -m x'`, a heredoc that contains it, and `git commit --no-edit; echo -m`, because each argument test reads one command's own arguments, with their quotes removed.
+
+- Text inside quotes, heredoc bodies and comments runs nothing. A command inside `$(…)` runs.
+- A command that runs another counts as both: `sudo`, `doas`, `env`, `time`, `exec`, `nice`, `nohup`, `command`, `builtin`, `stdbuf`, `timeout` and `xargs` run the command after their options; `reaped` and `headless-sway` the command after `--`; `nix develop` and `nix shell` the command after `-c`. The quoted script of `sh -c`, `bash -c` (or `-lc`) and the remote command of `ssh` are read as bash too, three levels deep.
+- An argument that is an expansion, such as `"$msg"` or `$(cat f)`, reads as its source text.
 
 ### Regex engine
 

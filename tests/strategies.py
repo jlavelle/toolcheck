@@ -9,6 +9,7 @@ from toolcheck.schema import (
     AnyPredicate,
     AstPredicate,
     AstQuery,
+    CommandPredicate,
     ContextLengthPredicate,
     CrossCallPredicate,
     CwdPredicate,
@@ -83,8 +84,18 @@ def _leaf_predicates() -> st.SearchStrategy[Predicate]:
             utils=st.none() | ast_rules,
         ),
     )
+    command = st.builds(
+        CommandPredicate,
+        field=NONEMPTY_TEXT,
+        names=st.lists(NONEMPTY_TEXT, min_size=1, max_size=3).map(tuple),
+        args=st.lists(
+            NONEMPTY_TEXT.filter(lambda a: not a.startswith("-")), max_size=3
+        ).map(tuple),
+        with_arg=st.none() | SAFE_TEXT,
+        without_arg=st.none() | SAFE_TEXT,
+    )
     return st.one_of(
-        regex, presence, value, length, context_length, cwd, ast, cross, prior
+        regex, presence, value, length, context_length, cwd, ast, command, cross, prior
     )
 
 
@@ -142,7 +153,13 @@ def _bash_leaves() -> st.SearchStrategy[Predicate]:
             ),
         ]
     )
-    return st.one_of(regex, presence, value, length, context_length, ast)
+    command = st.sampled_from(
+        [
+            CommandPredicate("command", ("rg", "head")),
+            CommandPredicate("command", ("rg",), with_arg="^-c$"),
+        ]
+    )
+    return st.one_of(regex, presence, value, length, context_length, ast, command)
 
 
 def bash_predicates() -> st.SearchStrategy[Predicate]:

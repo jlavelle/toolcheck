@@ -9,7 +9,7 @@ description: >
   Agent, `mcp__*`); when a rule fires wrongly, never fires, or needs a
   tighter regex; or on any of `[rule.match]`, `severity`, `sample_field`,
   `dedup`, `every_calls`, `regex`, `present`, `absent`, `equals`, `in`, `length`,
-  `context_length`, `prior_call`, `cwd`, `ast`, `not`, `all`, `any`, `cross_call`,
+  `context_length`, `prior_call`, `cwd`, `ast`, `command`, `not`, `all`, `any`, `cross_call`,
   `@last_pipe_command`, `[[view]]`, `toolcheck check`, `toolcheck lint-rules`,
   `toolcheck list`, or `TOOLCHECK_NO_DEDUP`. Out of scope: changing
   toolcheck's own Python source or the pi extension.
@@ -76,6 +76,7 @@ Messages follow one shape: what was seen, an em-dash, the remedy. Lowercase star
 | prior_call | `{ prior_call = { tool = "Skill", field = "skill", value = "ghci" } }` | an earlier call by this agent to that tool had the value in the field |
 | cwd | `{ cwd = '/work/' }` | `re.search` matches the agent's working directory |
 | ast | `{ ast = { field = "command", language = "bash", rule = { … } } }` | an ast-grep rule matches the field parsed as code (see below) |
+| command | `{ command = { field = "command", name = "gh", args = ["pr", "create"], with_arg = '…', without_arg = '…' } }` | the field, read as bash, runs that command, even under `sudo`, `env`, `nix develop -c` or `bash -c` (see below) |
 | not / all / any | `{ all = [ p, q ] }` | boolean combination |
 | cross_call | `{ cross_call = { kind = "duplicate_field_within_session", field = "file_path" } }` | seen earlier this session (see below) |
 
@@ -92,9 +93,9 @@ A Bash `command` is usually compound: `cd x && cat f`, `a; b`, `a | b`. A patter
 
 `(?i)` at the start makes a pattern case-insensitive.
 
-## Syntax trees
+## Commands and syntax trees
 
-Prefer `ast` to `regex` for a Bash rule that must not fire on quoted text or heredoc bodies, such as an `error` rule. The README's "Syntax trees" section has a worked `rg … | wc -l` rule. Match a command as `kind = "command"` with `has = { field = "name", regex = '^rg$' }` and its arguments as `has = { kind = "word", regex = … }`. Between piped commands, `follows` and `precedes` must step through the `|` token or set `stopBy = "end"`. Test a rule with plain `check` on the command, a quoted copy of it and a heredoc that contains it.
+Write a rule about running a program as `command`, not `regex`: it ignores quoted text and heredoc bodies, sees through env prefixes, paths and wrappers, and tests each command's own arguments. Use `ast` for shapes `command` cannot state, such as one command piped into another. For `ast`, the README's "Syntax trees" section has a worked `rg … | wc -l` rule. Match a command as `kind = "command"` with `has = { field = "name", regex = '^rg$' }` and its arguments as `has = { kind = "word", regex = … }`. Between piped commands, `follows` and `precedes` must step through the `|` token or set `stopBy = "end"`. Test a rule with plain `check` on the command, a quoted copy of it and a heredoc that contains it.
 
 ## Several tools
 

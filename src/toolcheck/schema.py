@@ -10,6 +10,7 @@ extractor (see toolcheck.compile):
   ContextLengthPredicate — compare the session's current context length to a constant
   CwdPredicate       — regex search on the agent's working directory
   AstPredicate       — ast-grep rule over a field parsed as source code
+  CommandPredicate   — a simple command a bash field runs
   NotPredicate       — logical NOT
   AllPredicate       — logical AND
   AnyPredicate       — logical OR
@@ -116,6 +117,21 @@ class AstPredicate:
 
 
 @dataclass(frozen=True)
+class CommandPredicate:
+    """The field, read as bash, runs a command named one of ``names``.
+
+    Its non-option arguments contain ``args`` in order, some argument matches
+    ``with_arg`` and none matches ``without_arg``, each when given.
+    """
+
+    field: str
+    names: tuple[str, ...]
+    args: tuple[str, ...] = ()
+    with_arg: str | None = None
+    without_arg: str | None = None
+
+
+@dataclass(frozen=True)
 class View:
     """A derived field ``name`` that rules on ``tool`` can read.
 
@@ -162,6 +178,7 @@ Predicate = (
     | ContextLengthPredicate
     | CwdPredicate
     | AstPredicate
+    | CommandPredicate
     | NotPredicate
     | AllPredicate
     | AnyPredicate
@@ -214,6 +231,7 @@ _PREDICATE_KEYS: frozenset[str] = frozenset(
         "context_length",
         "cwd",
         "ast",
+        "command",
         "not",
         "all",
         "any",
@@ -313,6 +331,8 @@ def parse_predicate(d: object) -> Predicate:
         return CwdPredicate(pattern=_string(m["cwd"], "cwd"))
     if "ast" in m:
         return _ast_predicate(_mapping(m["ast"], "ast"))
+    if "command" in m:
+        return _command_predicate(_mapping(m["command"], "command"))
     if "not" in m:
         return NotPredicate(operand=parse_predicate(m["not"]))
     if "all" in m:
@@ -368,6 +388,37 @@ def _ast_predicate(a: dict[str, object]) -> AstPredicate:
     _unknown_keys(a, {"field"} | _QUERY_KEYS, "ast")
     return AstPredicate(
         field=_string(a["field"], "ast.field"), query=_ast_query(a, "ast")
+    )
+
+
+def _names(x: object, ctx: str) -> tuple[str, ...]:
+    if isinstance(x, str):
+        return (x,)
+    names = tuple(_string(n, f"{ctx}[]") for n in _seq(x, ctx))
+    if not names:
+        raise ValueError(f"{ctx} must name at least one")
+    return names
+
+
+def _optional_string(x: object, ctx: str) -> str | None:
+    return None if x is None else _string(x, ctx)
+
+
+def _command_predicate(c: dict[str, object]) -> CommandPredicate:
+    _unknown_keys(c, {"field", "name", "args", "with_arg", "without_arg"}, "command")
+    args = tuple(
+        _string(a, "command.args[]") for a in _seq(c.get("args", []), "command.args")
+    )
+    if options := [a for a in args if a.startswith("-")]:
+        raise ValueError(
+            f"command.args lists only non-option arguments; test {options!r} with with_arg"
+        )
+    return CommandPredicate(
+        field=_string(c["field"], "command.field"),
+        names=_names(c["name"], "command.name"),
+        args=args,
+        with_arg=_optional_string(c.get("with_arg"), "command.with_arg"),
+        without_arg=_optional_string(c.get("without_arg"), "command.without_arg"),
     )
 
 
@@ -632,6 +683,7 @@ def _pred_has_cross_call(pred: Predicate) -> bool:
             | ContextLengthPredicate()
             | CwdPredicate()
             | AstPredicate()
+            | CommandPredicate()
             | PriorCallPredicate()
         ):
             return False
@@ -651,6 +703,7 @@ def predicate_fields(pred: Predicate) -> Iterator[str]:
             | InPredicate(field=f)
             | LengthPredicate(field=f)
             | AstPredicate(field=f)
+            | CommandPredicate(field=f)
             | CrossCallPredicate(field=f)
         ):
             yield f
@@ -681,6 +734,7 @@ def prior_calls(pred: Predicate) -> Iterator[PriorCallPredicate]:
             | ContextLengthPredicate()
             | CwdPredicate()
             | AstPredicate()
+            | CommandPredicate()
             | CrossCallPredicate()
         ):
             return

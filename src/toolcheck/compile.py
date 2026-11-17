@@ -28,6 +28,7 @@ from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
     AstPredicate,
+    CommandPredicate,
     ContextLengthPredicate,
     CrossCallPredicate,
     CwdPredicate,
@@ -166,6 +167,31 @@ def _compile_ast(pred: AstPredicate) -> Matcher:
     )
 
 
+def _compile_command(pred: CommandPredicate) -> Matcher:
+    from toolcheck.commands import SimpleCommand, simple_commands
+
+    with_arg = None if pred.with_arg is None else re.compile(pred.with_arg)
+    without_arg = None if pred.without_arg is None else re.compile(pred.without_arg)
+    names = frozenset(pred.names)
+
+    def runs(command: SimpleCommand) -> bool:
+        operands = iter(a for a in command.args if not a.startswith("-"))
+        return (
+            command.name in names
+            and all(arg in operands for arg in pred.args)
+            and (with_arg is None or any(with_arg.search(a) for a in command.args))
+            and (
+                without_arg is None
+                or not any(without_arg.search(a) for a in command.args)
+            )
+        )
+
+    return lambda env: _some(
+        resolve_field(pred.field, env),
+        lambda v: any(runs(c) for c in simple_commands(field_text(v))),
+    )
+
+
 def _compile_predicate(pred: Predicate) -> Matcher:
     match pred:
         case RegexPredicate(field=f, pattern=p):
@@ -244,6 +270,9 @@ def _compile_predicate(pred: Predicate) -> Matcher:
 
         case AstPredicate():
             return _compile_ast(pred)
+
+        case CommandPredicate():
+            return _compile_command(pred)
 
         case PriorCallPredicate(tool=t, field=f, value=v):
             return lambda env: v in env.state.history(t, f)
