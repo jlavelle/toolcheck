@@ -9,8 +9,8 @@ description: >
   Agent, `mcp__*`); when a rule fires wrongly, never fires, or needs a
   tighter regex; or on any of `[rule.match]`, `severity`, `sample_field`,
   `dedup`, `every_calls`, `regex`, `present`, `absent`, `equals`, `in`, `length`,
-  `context_length`, `prior_call`, `cwd`, `in_context`, `ast`, `command`, `not`, `all`, `any`, `cross_call`,
-  `@last_pipe_command`, `[[view]]`, `toolcheck check`, `toolcheck lint-rules`,
+  `context_length`, `prior_call`, `cwd`, `in_context`, `ast`, `not`, `all`, `any`, `cross_call`,
+  `@last_pipe_command`, `toolcheck check`, `toolcheck lint-rules`,
   `toolcheck list`, or `TOOLCHECK_NO_DEDUP`. Out of scope: changing
   toolcheck's own Python source or the pi extension.
 ---
@@ -77,7 +77,6 @@ Messages follow one shape: what was seen, an em-dash, the remedy. Lowercase star
 | cwd | `{ cwd = '/work/' }` | `re.search` matches the agent's working directory |
 | in_context | `{ in_context = 'Cut words, not facts' }` | `re.search` matches a string in the agent's transcript since its last compaction |
 | ast | `{ ast = { field = "command", language = "bash", rule = { … } } }` | an ast-grep rule matches the field parsed as code (see below) |
-| command | `{ command = { field = "command", name = "gh", args = ["pr", "create"], with_arg = '…', without_arg = '…' } }` | the field, read as bash, runs that command, even under `sudo`, `env`, `nix develop -c` or `bash -c` (see below) |
 | not / all / any | `{ all = [ p, q ] }` | boolean combination |
 | cross_call | `{ cross_call = { kind = "duplicate_field_within_session", field = "file_path" } }` | seen earlier this session (see below) |
 
@@ -94,13 +93,9 @@ A Bash `command` is usually compound: `cd x && cat f`, `a; b`, `a | b`. A patter
 
 `(?i)` at the start makes a pattern case-insensitive.
 
-## Commands and syntax trees
+## Syntax trees
 
-Write a rule about running a program as `command`, not `regex`: it ignores quoted text and heredoc bodies, sees through env prefixes, paths and wrappers, and tests each command's own arguments. Use `ast` for shapes `command` cannot state, such as one command piped into another. For `ast`, the README's "Syntax trees" section has a worked `rg … | wc -l` rule. Match a command as `kind = "command"` with `has = { field = "name", regex = '^rg$' }` and its arguments as `has = { kind = "word", regex = … }`. Between piped commands, `follows` and `precedes` must step through the `|` token or set `stopBy = "end"`. Test a rule with plain `check` on the command, a quoted copy of it and a heredoc that contains it.
-
-## Several tools
-
-To cover one action in several tools, such as a command run through Bash or through an MCP tool that runs code, list the tools in `tool` and match a `[[view]]` field that each tool declares, such as `@shell`. The README's "Views" section shows a view that pulls the shell commands out of TypeScript ``sh`…` `` and `exec("…")` calls. `toolcheck lint-rules` reports a view no tool of the rule declares. Read the rules directory for views already declared before adding one.
+Use `ast` rather than `regex` when a rule must tell a command from the same text inside quotes, a heredoc or a comment. For `ast`, the README's "Syntax trees" section has a worked `rg … | wc -l` rule. Match a command as `kind = "command"` with `has = { field = "name", regex = '^rg$' }` and its arguments as `has = { kind = "word", regex = … }`. Between piped commands, `follows` and `precedes` must step through the `|` token or set `stopBy = "end"`. Test a rule with plain `check` on the command, a quoted copy of it and a heredoc that contains it.
 
 ## Gotchas
 
@@ -113,7 +108,7 @@ These hold in the installed `toolcheck` and will not be reported by `lint-rules`
 - `prior_call` sees only calls the hook was run on. A rule that waits for a `Skill` call needs `Skill` in the PreToolUse hook's matcher. Its `field` is a raw input key, never an `@`-field. Plain `check` has no history, so there `not { prior_call = … }` always holds.
 - `cwd` comes from the payload's `cwd` and is `False` when the payload has none. It is the directory the call starts in, so it misses a `cd` inside the same command: match the command text for that.
 - `in_context` reads the transcript only under `--claude`, and is `False` elsewhere. The transcript lags by about one message, and text from just before a compaction counts as gone. Match a sentence from the text's body, unanchored, because Read output carries line numbers and a refusal starts with the rule's name.
-- `@last_pipe_command` is the basename of the first token of the rightmost `|` segment, with `VAR=x` prefixes stripped. `||` is not a pipe. It is the only builtin derived field; any other `@name` must be a view of one of the rule's tools, or lint fails.
+- `@last_pipe_command` is the basename of the first token of the rightmost `|` segment, with `VAR=x` prefixes stripped. `||` is not a pipe. It is the only builtin derived field; any other `@name` fails lint.
 - Under pi, `path` is renamed to `file_path` before evaluation. pi's `edit` sends an `edits` list, not a single string, so toolcheck joins the `newText` values into a synthetic `new_string`; a rule on `new_string` fires under both agents. `old_string` is never synthesised, so rules on it never fire under pi. A `cross_call` on `field = "path"` never fires under pi either, and lint does not flag it. Target `file_path`.
 - Dedup makes a warning fire once per session (and `every_calls` throttles it to an interval), so a rule you are iterating on in a live session seems to stop working. Set `TOOLCHECK_NO_DEDUP=1` in the hook's environment while developing, or test with plain `check`.
 
@@ -141,7 +136,7 @@ To make an agent read a guide before a call it covers, such as a commit message,
 ```toml
 [rule.match]
 all = [
-    { command = { field = "command", name = "git", args = ["commit"] } },
+    { regex = { field = "command", pattern = '(^|&&|;|\|)\s*git\s+commit\b' } },
     { not = { in_context = 'Cut words, not facts\. Brevity means' } },
 ]
 ```

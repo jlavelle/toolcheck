@@ -11,7 +11,6 @@ extractor (see toolcheck.compile):
   CwdPredicate       — regex search on the agent's working directory
   InContextPredicate — regex search on the text in the agent's context
   AstPredicate       — ast-grep rule over a field parsed as source code
-  CommandPredicate   — a simple command a bash field runs
   NotPredicate       — logical NOT
   AllPredicate       — logical AND
   AnyPredicate       — logical OR
@@ -23,7 +22,7 @@ from __future__ import annotations
 import functools
 import os
 import tomllib
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -128,36 +127,6 @@ class AstPredicate:
     query: AstQuery
 
 
-@dataclass(frozen=True)
-class CommandPredicate:
-    """The field, read as bash, runs a command named one of ``names``.
-
-    Its non-option arguments contain ``args`` in order, some argument matches
-    ``with_arg`` and none matches ``without_arg``, each when given.
-    """
-
-    field: str
-    names: tuple[str, ...]
-    args: tuple[str, ...] = ()
-    with_arg: str | None = None
-    without_arg: str | None = None
-
-
-@dataclass(frozen=True)
-class View:
-    """A derived field ``name`` that rules on ``tool`` can read.
-
-    Its value is the list of strings that ``field`` yields: the field itself,
-    or, with a query, each node the query matches in it, string literals read
-    as their contents.
-    """
-
-    name: str
-    tool: str
-    field: str
-    query: AstQuery | None = None
-
-
 CrossCallKind = Literal["duplicate_field_within_session", "adjacent_near_identical"]
 
 
@@ -191,7 +160,6 @@ Predicate = (
     | CwdPredicate
     | InContextPredicate
     | AstPredicate
-    | CommandPredicate
     | NotPredicate
     | AllPredicate
     | AnyPredicate
@@ -347,8 +315,6 @@ def parse_predicate(d: object) -> Predicate:
         return InContextPredicate(pattern=_string(m["in_context"], "in_context"))
     if "ast" in m:
         return _ast_predicate(_mapping(m["ast"], "ast"))
-    if "command" in m:
-        return _command_predicate(_mapping(m["command"], "command"))
     if "not" in m:
         return NotPredicate(operand=parse_predicate(m["not"]))
     if "all" in m:
@@ -404,55 +370,6 @@ def _ast_predicate(a: dict[str, object]) -> AstPredicate:
     _unknown_keys(a, {"field"} | _QUERY_KEYS, "ast")
     return AstPredicate(
         field=_string(a["field"], "ast.field"), query=_ast_query(a, "ast")
-    )
-
-
-def _names(x: object, ctx: str) -> tuple[str, ...]:
-    if isinstance(x, str):
-        return (x,)
-    names = tuple(_string(n, f"{ctx}[]") for n in _seq(x, ctx))
-    if not names:
-        raise ValueError(f"{ctx} must name at least one")
-    return names
-
-
-def _optional_string(x: object, ctx: str) -> str | None:
-    return None if x is None else _string(x, ctx)
-
-
-def _command_predicate(c: dict[str, object]) -> CommandPredicate:
-    _unknown_keys(c, {"field", "name", "args", "with_arg", "without_arg"}, "command")
-    args = tuple(
-        _string(a, "command.args[]") for a in _seq(c.get("args", []), "command.args")
-    )
-    if options := [a for a in args if a.startswith("-")]:
-        raise ValueError(
-            f"command.args lists only non-option arguments; test {options!r} with with_arg"
-        )
-    return CommandPredicate(
-        field=_string(c["field"], "command.field"),
-        names=_names(c["name"], "command.name"),
-        args=args,
-        with_arg=_optional_string(c.get("with_arg"), "command.with_arg"),
-        without_arg=_optional_string(c.get("without_arg"), "command.without_arg"),
-    )
-
-
-def _view(d: dict[str, object]) -> View:
-    _unknown_keys(d, {"name", "tool", "field"} | _QUERY_KEYS, "view")
-    name = _string(d["name"], "view.name")
-    if not name.startswith("@"):
-        raise ValueError(f"view name must start with '@', got {name!r}")
-    query = _ast_query(d, "view") if "language" in d or "rule" in d else None
-    if query is not None:
-        from toolcheck import syntax
-
-        syntax.check(query)
-    return View(
-        name=name,
-        tool=_string(d["tool"], "view.tool"),
-        field=_string(d["field"], "view.field"),
-        query=query,
     )
 
 
@@ -531,11 +448,10 @@ class LoadError:
 
 @dataclass(frozen=True)
 class Catalogue:
-    """Rules and views that parsed plus the problems met along the way, in load order."""
+    """Rules that parsed plus the problems met along the way, in load order."""
 
     rules: tuple[Rule, ...]
     errors: tuple[LoadError, ...]
-    views: tuple[View, ...] = ()
 
 
 def _item_label(kind: str, index: int, raw: object) -> str:
@@ -558,11 +474,9 @@ def parse_rules(data: bytes, path: Path) -> Catalogue:
     try:
         parsed = tomllib.loads(data.decode("utf-8"))
         raws = _seq(parsed.get("rule", []), "rule")
-        raw_views = _seq(parsed.get("view", []), "view")
     except (ValueError, TypeError, KeyError) as e:
         return Catalogue((), (LoadError(path, _problem(e)),))
     rules: list[Rule] = []
-    views: list[View] = []
     errors: list[LoadError] = []
     for i, raw in enumerate(raws):
         try:
@@ -571,14 +485,7 @@ def parse_rules(data: bytes, path: Path) -> Catalogue:
             errors.append(
                 LoadError(path, f"{_item_label('rule', i, raw)}: {_problem(e)}")
             )
-    for i, raw in enumerate(raw_views):
-        try:
-            views.append(_view(_mapping(raw, "view")))
-        except (ValueError, TypeError, KeyError) as e:
-            errors.append(
-                LoadError(path, f"{_item_label('view', i, raw)}: {_problem(e)}")
-            )
-    return Catalogue(tuple(rules), tuple(errors), tuple(views))
+    return Catalogue(tuple(rules), tuple(errors))
 
 
 def _rules_dirs() -> list[Path]:
@@ -609,7 +516,6 @@ def _load_all_rules() -> Catalogue:
     load. Memoised; call cache_clear() to invalidate.
     """
     rules: list[Rule] = []
-    views: list[View] = []
     errors: list[LoadError] = []
     for root in _rules_dirs():
         if not root.is_dir():
@@ -625,9 +531,8 @@ def _load_all_rules() -> Catalogue:
                 errors.append(LoadError(path, str(e)))
                 continue
             rules.extend(parsed.rules)
-            views.extend(parsed.views)
             errors.extend(parsed.errors)
-    return Catalogue(tuple(rules), tuple(errors), tuple(views))
+    return Catalogue(tuple(rules), tuple(errors))
 
 
 def _dedup_last_wins(rules: Iterable[Rule]) -> list[Rule]:
@@ -644,29 +549,6 @@ def load_catalogue() -> list[Rule]:
     return [r for r in _dedup_last_wins(_load_all_rules().rules) if r.enabled]
 
 
-Views = Mapping[str, Mapping[str, View]]
-"""Views by tool, then by name."""
-
-
-def views_by_tool(views: Iterable[View]) -> dict[str, dict[str, View]]:
-    """Index views by tool and name, a later view replacing an earlier one."""
-    index: dict[str, dict[str, View]] = {}
-    for view in views:
-        index.setdefault(view.tool, {})[view.name] = view
-    return index
-
-
-@functools.cache
-def load_views() -> Views:
-    """Views from every rules file, last-wins per tool and name. Memoised with the catalogue."""
-    return views_by_tool(_load_all_rules().views)
-
-
-def load_all_views() -> Sequence[View]:
-    """All views in load order, for linting. Memoised with the catalogue."""
-    return _load_all_rules().views
-
-
 def load_errors() -> Sequence[LoadError]:
     """Files and rules that failed to parse on the last load. Memoised via _load_all_rules."""
     return _load_all_rules().errors
@@ -680,7 +562,6 @@ def load_all_rules() -> Sequence[Rule]:
 def clear_rule_cache() -> None:
     """Invalidate the memoised catalogue (e.g. after changing TOOLCHECK_RULES_DIR)."""
     _load_all_rules.cache_clear()
-    load_views.cache_clear()
 
 
 def _pred_has_cross_call(pred: Predicate) -> bool:
@@ -700,7 +581,6 @@ def _pred_has_cross_call(pred: Predicate) -> bool:
             | CwdPredicate()
             | InContextPredicate()
             | AstPredicate()
-            | CommandPredicate()
             | PriorCallPredicate()
         ):
             return False
@@ -720,7 +600,6 @@ def predicate_fields(pred: Predicate) -> Iterator[str]:
             | InPredicate(field=f)
             | LengthPredicate(field=f)
             | AstPredicate(field=f)
-            | CommandPredicate(field=f)
             | CrossCallPredicate(field=f)
         ):
             yield f
@@ -757,7 +636,6 @@ def prior_calls(pred: Predicate) -> Iterator[PriorCallPredicate]:
             | CwdPredicate()
             | InContextPredicate()
             | AstPredicate()
-            | CommandPredicate()
             | CrossCallPredicate()
         ):
             return

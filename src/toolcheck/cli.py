@@ -51,8 +51,6 @@ from typing import cast
 
 from toolcheck.compile import (
     Env,
-    Values,
-    ViewCycleError,
     compile_rule,
     field_text,
     known_derived_fields,
@@ -63,18 +61,13 @@ from toolcheck.pi import normalise
 from toolcheck.schema import (
     DEFAULT_SAMPLE,
     Rule,
-    View,
-    Views,
     cross_call_of,
     is_stateless,
     load_all_rules,
-    load_all_views,
     load_catalogue,
     load_errors,
-    load_views,
     predicate_fields,
     prior_calls,
-    views_by_tool,
 )
 from toolcheck.state import (
     SessionState,
@@ -119,7 +112,7 @@ def _sample(rule: Rule, env: Env) -> str:
         value = resolve_field(sample_field, env)
     except ValueError:
         return ""
-    return "\n".join(value.items) if isinstance(value, Values) else field_text(value)
+    return field_text(value)
 
 
 def _eval_stateless(rule: Rule, env: Env) -> bool:
@@ -144,7 +137,6 @@ def evaluate_call(
     context_length: int | None = None,
     call_index: int | None = None,
     cwd: str | None = None,
-    views: Views | None = None,
     context: tuple[str, ...] | None = None,
 ) -> tuple[list[Rule], SessionState]:
     """Evaluate every rule for the tool against the input and prior state.
@@ -161,7 +153,7 @@ def evaluate_call(
     """
     observed_fields = _observed_fields(tool_name, rules)
     rules = [r for r in rules if tool_name in r.tools]
-    env = Env(tool_input, context_length, state, cwd, tool_name, views or {}, context)
+    env = Env(tool_input, context_length, state, cwd, tool_name, context)
     fired: list[Rule] = []
     next_state = state
 
@@ -296,7 +288,6 @@ def _cmd_check(args: argparse.Namespace) -> int:
     for notice in _load_notices():
         print(notice, file=sys.stderr)
 
-    views = load_views()
     fired, _ = evaluate_call(
         tool,
         tool_input,
@@ -305,7 +296,6 @@ def _cmd_check(args: argparse.Namespace) -> int:
         now="",
         rules=load_catalogue(),
         cwd=_as_str(payload.get("cwd")),
-        views=views,
     )
 
     if args.json:
@@ -315,7 +305,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
     if not fired:
         print("(no rules fired)")
         return 0
-    env = Env(tool_input, tool=tool, views=views)
+    env = Env(tool_input, tool=tool)
     for r in fired:
         print(render(r, env))
     return 1
@@ -354,7 +344,6 @@ def _run_hook(
     now = datetime.now(UTC).isoformat()
     call_index = state.calls + 1 if path is not None else None
     state = state.with_call() if path is not None else state
-    views = load_views()
     fired, next_state = evaluate_call(
         tool,
         tool_input,
@@ -365,7 +354,6 @@ def _run_hook(
         context_length,
         call_index,
         cwd,
-        views,
         context,
     )
 
@@ -380,7 +368,7 @@ def _run_hook(
     if path is not None:
         save_state(path, next_state)
 
-    env = Env(tool_input, tool=tool, views=views)
+    env = Env(tool_input, tool=tool)
     warnings = [render(r, env) for r in fired if r.severity == "warning"]
     errors = [render(r, env) for r in fired if r.severity == "error"]
     reminders = [render(r, env) for r in fired if r.severity == "reminder"]
@@ -464,7 +452,7 @@ def _check_pi(
     return 0
 
 
-def lint_rule(rule: Rule, views: Views | None = None) -> list[str]:
+def lint_rule(rule: Rule) -> list[str]:
     """Authoring mistakes that would make the rule silently never fire."""
     issues: list[str] = []
     if not is_stateless(rule) and cross_call_of(rule) is None:
@@ -478,9 +466,7 @@ def lint_rule(rule: Rule, views: Views | None = None) -> list[str]:
         issues.append(
             "every_calls is ignored on cross_call rules (they fire on every recurrence)"
         )
-    known = known_derived_fields() | {
-        name for tool in rule.tools for name in (views or {}).get(tool, {})
-    }
+    known = known_derived_fields()
     fields = set(predicate_fields(rule.match))
     if rule.sample_field is not None:
         fields.add(rule.sample_field)
@@ -490,38 +476,15 @@ def lint_rule(rule: Rule, views: Views | None = None) -> list[str]:
     return issues
 
 
-def lint_view(view: View, views: Views) -> list[str]:
-    """Authoring mistakes that would make the view always empty."""
-    issues: list[str] = []
-    tool_views = views.get(view.tool, {})
-    if view.field.startswith("@") and view.field not in (
-        known_derived_fields() | set(tool_views)
-    ):
-        issues.append(f"unknown derived field: {view.field!r}")
-    try:
-        resolve_field(view.name, Env({}, tool=view.tool, views=views))
-    except ViewCycleError as e:
-        issues.append(str(e))
-    except ValueError:
-        pass  # an unknown field, reported above
-    return issues
-
-
-def lint_rules(rules: Sequence[Rule], views: Sequence[View] = ()) -> list[str]:
+def lint_rules(rules: Sequence[Rule]) -> list[str]:
     """Catalogue-wide problems, one human-readable line each."""
-    index = views_by_tool(views)
     problems = [
         f"duplicate rule name: {name!r} ({n} definitions; last wins)"
         for name, n in sorted(Counter(r.name for r in rules).items())
         if n > 1
     ]
     for rule in rules:
-        problems.extend(f"{rule.name}: {issue}" for issue in lint_rule(rule, index))
-    for view in views:
-        problems.extend(
-            f"view {view.name} on {view.tool}: {issue}"
-            for issue in lint_view(view, index)
-        )
+        problems.extend(f"{rule.name}: {issue}" for issue in lint_rule(rule))
     return problems
 
 
@@ -550,9 +513,7 @@ def _cmd_reset(args: argparse.Namespace) -> int:
 
 def _cmd_lint_rules(args: argparse.Namespace) -> int:
     rules = load_all_rules()
-    problems = [f"{e.path}: {e.message}" for e in load_errors()] + lint_rules(
-        rules, load_all_views()
-    )
+    problems = [f"{e.path}: {e.message}" for e in load_errors()] + lint_rules(rules)
     if not problems:
         print(f"ok: {len(rules)} rules")
         return 0

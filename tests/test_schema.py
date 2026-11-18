@@ -14,7 +14,6 @@ from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
     AstPredicate,
-    CommandPredicate,
     ContextLengthPredicate,
     CrossCallPredicate,
     CwdPredicate,
@@ -73,12 +72,6 @@ def pred_to_toml(p: Predicate) -> dict[str, object]:
                 "ast": {"field": f, "language": q.language, "rule": q.rule}
                 | {k: v for k, v in optional.items() if v is not None}
             }
-        case CommandPredicate(field=f, names=ns, args=a, with_arg=w, without_arg=wo):
-            optional = {"with_arg": w, "without_arg": wo}
-            return {
-                "command": {"field": f, "name": list(ns), "args": list(a)}
-                | {k: v for k, v in optional.items() if v is not None}
-            }
         case NotPredicate(operand=o):
             return {"not": pred_to_toml(o)}
         case AllPredicate(operands=ops):
@@ -110,19 +103,6 @@ def test_parse_rejects_unknown_ast_key():
     with pytest.raises(ValueError):
         parse_predicate(
             {"ast": {"field": "command", "language": "bash", "rule": {}, "fix": "x"}}
-        )
-
-
-def test_command_args_reject_options():
-    with pytest.raises(ValueError, match="with_arg"):
-        parse_predicate(
-            {
-                "command": {
-                    "field": "command",
-                    "name": "git",
-                    "args": ["push", "--force"],
-                }
-            }
         )
 
 

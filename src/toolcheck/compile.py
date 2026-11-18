@@ -10,10 +10,8 @@ context-length, cwd, in-context and prior-call predicates read the ambient
 values.
 
 A predicate's ``field`` is resolved by ``resolve_field``: an @-prefixed name
-is a derived field, either a builtin pure extractor or a view the
-catalogue declares for the calling tool; any other name is a raw tool_input
-key. A view yields ``Values``, and a field predicate on them holds when it
-holds for one of them.
+is a derived field computed by a builtin pure extractor; any other name is
+a raw tool_input key.
 """
 
 from __future__ import annotations
@@ -29,7 +27,6 @@ from toolcheck.schema import (
     AllPredicate,
     AnyPredicate,
     AstPredicate,
-    CommandPredicate,
     ContextLengthPredicate,
     CrossCallPredicate,
     CwdPredicate,
@@ -42,8 +39,6 @@ from toolcheck.schema import (
     PriorCallPredicate,
     RegexPredicate,
     Rule,
-    View,
-    Views,
 )
 from toolcheck.state import SessionState
 
@@ -57,19 +52,7 @@ class Env:
     state: SessionState = field(default_factory=SessionState)
     cwd: str | None = None
     tool: str = ""
-    views: Views = field(default_factory=dict[str, Mapping[str, View]])
     context: tuple[str, ...] | None = None
-
-
-class ViewCycleError(ValueError):
-    """A view that reads itself, directly or through other views."""
-
-
-@dataclass(frozen=True)
-class Values:
-    """The strings a view yields."""
-
-    items: tuple[str, ...]
 
 
 Matcher = Callable[["Env"], bool]
@@ -92,44 +75,15 @@ def known_derived_fields() -> frozenset[str]:
 
 
 def resolve_field(field: str, env: Env) -> object | None:
-    """A field's value: derived extractor or view for @-names, raw key otherwise.
+    """A field's value: derived extractor for @-names, raw key otherwise.
 
-    A view the calling tool lacks resolves to None. Raises ValueError for an
-    @-name that is neither a builtin nor a view of some tool.
+    Raises ValueError for an unknown @-name.
     """
-    return _resolve(field, env, frozenset())
-
-
-def _resolve(field: str, env: Env, seen: frozenset[str]) -> object | None:
     if not field.startswith("@"):
         return env.tool_input.get(field)
     if (extractor := _DERIVED.get(field)) is not None:
         return extractor(env.tool_input)
-    view = env.views.get(env.tool, {}).get(field)
-    if view is None:
-        if any(field in named for named in env.views.values()):
-            return None
-        raise ValueError(f"unknown derived field: {field!r}")
-    if field in seen:
-        raise ViewCycleError(f"view {field!r} reads itself")
-    source = _resolve(view.field, env, seen | {field})
-    texts = (
-        source.items
-        if isinstance(source, Values)
-        else (() if source is None else (field_text(source),))
-    )
-    if view.query is None:
-        return Values(texts)
-    from toolcheck import syntax
-
-    return Values(tuple(s for t in texts for s in syntax.extract(view.query, t)))
-
-
-def _some(value: object | None, test: Callable[[object | None], bool]) -> bool:
-    """``test`` on a field's value, or on some item when the value is a view's Values."""
-    if isinstance(value, Values):
-        return any(test(item) for item in value.items)
-    return test(value)
+    raise ValueError(f"unknown derived field: {field!r}")
 
 
 def field_text(value: object) -> str:
@@ -164,34 +118,8 @@ def _compile_ast(pred: AstPredicate) -> Matcher:
     from toolcheck import syntax
 
     syntax.check(pred.query)
-    return lambda env: _some(
-        resolve_field(pred.field, env),
-        lambda v: syntax.matches(pred.query, field_text(v)),
-    )
-
-
-def _compile_command(pred: CommandPredicate) -> Matcher:
-    from toolcheck.commands import SimpleCommand, simple_commands
-
-    with_arg = None if pred.with_arg is None else re.compile(pred.with_arg)
-    without_arg = None if pred.without_arg is None else re.compile(pred.without_arg)
-    names = frozenset(pred.names)
-
-    def runs(command: SimpleCommand) -> bool:
-        operands = iter(a for a in command.args if not a.startswith("-"))
-        return (
-            command.name in names
-            and all(arg in operands for arg in pred.args)
-            and (with_arg is None or any(with_arg.search(a) for a in command.args))
-            and (
-                without_arg is None
-                or not any(without_arg.search(a) for a in command.args)
-            )
-        )
-
-    return lambda env: _some(
-        resolve_field(pred.field, env),
-        lambda v: any(runs(c) for c in simple_commands(field_text(v))),
+    return lambda env: syntax.matches(
+        pred.query, field_text(resolve_field(pred.field, env))
     )
 
 
@@ -205,22 +133,14 @@ def _compile_predicate(pred: Predicate) -> Matcher:
                 _c: re.Pattern[str] = compiled,
                 _f: str = f,
             ) -> bool:
-                return _some(
-                    resolve_field(_f, env), lambda v: bool(_c.search(field_text(v)))
-                )
+                return bool(_c.search(field_text(resolve_field(_f, env))))
 
             return _regex
 
         case PresencePredicate(field=f, present=want):
 
             def _present(env: Env, _f: str = f, _want: bool = want) -> bool:
-                value = resolve_field(_f, env)
-                present = (
-                    bool(value.items)
-                    if isinstance(value, Values)
-                    else value is not None
-                )
-                return present == _want
+                return (resolve_field(_f, env) is not None) == _want
 
             return _present
 
@@ -232,10 +152,8 @@ def _compile_predicate(pred: Predicate) -> Matcher:
                 _f: str = f,
                 _members: frozenset[str] = members,
             ) -> bool:
-                return _some(
-                    resolve_field(_f, env),
-                    lambda v: v is not None and field_text(v) in _members,
-                )
+                val = resolve_field(_f, env)
+                return val is not None and field_text(val) in _members
 
             return _in
 
@@ -248,9 +166,7 @@ def _compile_predicate(pred: Predicate) -> Matcher:
                 _v: int = v,
                 _cmp: Callable[[int, int], bool] = cmp,
             ) -> bool:
-                return _some(
-                    resolve_field(_f, env), lambda v: _cmp(field_length(v), _v)
-                )
+                return _cmp(field_length(resolve_field(_f, env)), _v)
 
             return _length
 
@@ -280,9 +196,6 @@ def _compile_predicate(pred: Predicate) -> Matcher:
 
         case AstPredicate():
             return _compile_ast(pred)
-
-        case CommandPredicate():
-            return _compile_command(pred)
 
         case PriorCallPredicate(tool=t, field=f, value=v):
             return lambda env: v in env.state.history(t, f)

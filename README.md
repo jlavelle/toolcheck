@@ -156,7 +156,7 @@ An optional `every_calls` throttles a repeating reminder to at most one delivery
 
 `message_file` can replace `message` with a path to a text file whose contents are the message, resolved relative to the rule's TOML file when it is not absolute. It suits a longer hint, such as a document the model should read before using a tool. A missing file makes the rule a load error.
 
-An optional `sample_field` names the tool-input field echoed as the `> sample` second line of the hint (derived `@`-fields and views work too, a view's values one per line). It defaults by the tool of the call — Bash: `command`; Read/Edit/Write: `file_path`; Grep/Glob: `pattern`; Agent: `description` — and to no sample line for other tools. `reminder` is non-blocking like `warning` but frames the note as context rather than a problem — that framing lives in the `message` text, not in any prefix toolcheck adds.
+An optional `sample_field` names the tool-input field echoed as the `> sample` second line of the hint (derived `@`-fields work too). It defaults by the tool of the call — Bash: `command`; Read/Edit/Write: `file_path`; Grep/Glob: `pattern`; Agent: `description` — and to no sample line for other tools. `reminder` is non-blocking like `warning` but frames the note as context rather than a problem — that framing lives in the `message` text, not in any prefix toolcheck adds.
 
 ### Predicates
 
@@ -175,7 +175,6 @@ A predicate tests a `field` of the tool input. Compose them freely with `not`, `
 | cwd       | `{ cwd = '/work/' }`                                                   | the pattern matches the agent's working directory (see below) |
 | in_context | `{ in_context = '# Prose for people' }`                               | the pattern matches text in the agent's context since its last compaction (see below) |
 | ast       | `{ ast = { field = "command", language = "bash", rule = { … } } }`     | the ast-grep rule matches the field parsed as code (see below) |
-| command   | `{ command = { field = "command", name = "gh", args = ["pr", "create"] } }` | the field, read as bash, runs the command (see below) |
 | not       | `{ not = <predicate> }`                                                | the inner predicate fails                 |
 | all       | `{ all = [ <predicate>, … ] }`                                         | every operand holds                       |
 | any       | `{ any = [ <predicate>, … ] }`                                         | some operand holds                        |
@@ -227,7 +226,7 @@ message_file = "~/.claude/references/prose-for-people.md"
 severity     = "error"
 [rule.match]
 all = [
-    { command = { field = "command", name = "git", args = ["commit"] } },
+    { regex = { field = "command", pattern = '(^|&&|;|\|)\s*git\s+commit\b' } },
     { not = { in_context = 'Cut words, not facts\. Brevity means' } },
 ]
 ```
@@ -305,69 +304,13 @@ follows = { regex = '^\|&?$', follows = { kind = "command", has = { field = "nam
 - `lint-rules` reports an unknown language or node kind. A `pattern` that does not parse matches nothing, and lint cannot tell.
 - The ast-grep playground and the `ast-grep` CLI show the tree a command parses to.
 
-#### Commands
-
-`command` reads a field as a bash script and holds when one of the simple commands it runs matches:
-
-```toml
-[rule.match.command]
-field       = "command"
-name        = "git"              # or a list, such as ["gh", "hub"]; matched against the program's basename
-args        = ["commit"]         # optional: these appear in order among the arguments that do not start with "-"
-with_arg    = '^(-[a-z]*m|--message|-F|--file)'   # optional: some argument matches
-without_arg = '^--no-edit$'      # optional: no argument matches
-```
-
-It matches `git commit -am x`, `cd repo && FOO=1 /usr/bin/git -C . commit -m x` and `sudo git commit -m x`, and skips `echo 'git commit -m x'`, a heredoc that contains it, and `git commit --no-edit; echo -m`, because each argument test reads one command's own arguments, with their quotes removed.
-
-- Text inside quotes, heredoc bodies and comments runs nothing. A command inside `$(…)` runs.
-- A command that runs another counts as both: `sudo`, `doas`, `env`, `time`, `exec`, `nice`, `nohup`, `command`, `builtin`, `stdbuf`, `timeout` and `xargs` run the command after their options; `reaped` and `headless-sway` the command after `--`; `nix develop` and `nix shell` the command after `-c`. The quoted script of `sh -c`, `bash -c` (or `-lc`) and the remote command of `ssh` are read as bash too, three levels deep.
-- An argument that is an expansion, such as `"$msg"` or `$(cat f)`, reads as its source text.
-
 ### Regex engine
 
 Patterns use Python's `re` module with `search` semantics. See the [documentation](https://docs.python.org/3/library/re.html) for more info.
 
-### Views
-
-A rule that names several tools usually needs one field that means the same thing in each, such as the shell commands a call runs, which Bash sends as `command` and a code-running MCP tool hides inside the `code` it runs. A `[[view]]` table in any rules file declares such a field for one tool:
-
-```toml
-[[view]]
-name  = "@shell"
-tool  = "Bash"
-field = "command"
-
-[[view]]
-name     = "@shell"
-tool     = "mcp__x__run"
-field    = "code"
-language = "typescript"
-[view.rule]
-any = [
-  { kind = "template_string", inside = { kind = "call_expression", has = { field = "function", regex = "^sh$" } } },
-  { any = [{ kind = "string" }, { kind = "template_string" }], inside = { kind = "arguments", inside = { kind = "call_expression", has = { field = "function", regex = "^exec$" } } } },
-]
-
-[[rule]]
-name     = "gh-pr-create"
-tool     = ["Bash", "mcp__x__run"]
-message  = "…"
-[rule.match.ast]
-field    = "@shell"
-language = "bash"
-rule     = { kind = "command", has = { field = "name", regex = "^gh$" } }
-```
-
-- A view's value is a list of strings. Without `language` and `rule` it holds the field's value. With them, it holds each node the ast-grep rule matches in the field: a string literal as its contents, with each interpolation such as `${x}` read as the word `_`, and any other node as its source text. Above, ``await sh`cd ${d} && gh pr create` `` gives `cd _ && gh pr create`, and a string that only mentions it gives nothing.
-- `regex`, `equals`, `in`, `length` and `ast` hold on a view when they hold for one of its values, `present` when it has any, and `absent` when it has none.
-- A view's `field` may name another view of the same tool.
-- On a tool with no view of that name, the field is absent. `lint-rules` reports a view name that no tool of the rule declares, a view that reads itself, and a query that does not compile.
-- Views with the same name and tool replace each other in load order, like rules.
-
 ### Builtin derived fields
 
-A field starting with `@` is computed from the tool input, by a view or by one of the derived fields built into `toolcheck`:
+A field starting with `@` is computed from the tool input by one of the derived fields built into `toolcheck`:
 
 - `@last_pipe_command` — the command name in the rightmost pipe segment (`rg foo | head -5` → `head`).
 
